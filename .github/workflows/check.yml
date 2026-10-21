@@ -1,0 +1,35 @@
+name: OMP checks
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    name: check (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-latest, ubuntu-latest]
+        python: ['3.10', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Source and offline integration checks
+        run: python tools/check.py
+      - name: Build and install package
+        run: python -m pip install .
+      - name: Installed package and console entrypoint outside source
+        run: >-
+          python -c "import subprocess, sys, tempfile;
+          folder = tempfile.TemporaryDirectory();
+          subprocess.run([sys.executable, '-c', 'import omp_core'], cwd=folder.name, check=True);
+          subprocess.run(['omp', '--help'], cwd=folder.name, check=True);
+          folder.cleanup()"

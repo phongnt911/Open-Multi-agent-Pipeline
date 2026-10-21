@@ -4,6 +4,12 @@
 **Nền tảng mục tiêu:** Windows (PowerShell / Windows Terminal)  
 **Ngôn ngữ phát triển:** Python 3.10+  
 
+> Phạm vi hiện hành: MVP 0.1 trong README và SDD. Các FR/NFR dưới đây là
+> tầm nhìn dài hạn, chưa phải tính năng đã triển khai. MVP chỉ chạy một
+> provider/một task, chưa có failover, migration, vault bất biến, dashboard
+> hoặc push tự động. Phục hồi có checkpoint và bước xác minh thủ công;
+> không cam kết chặn tuyệt đối tác động ngoài repo bằng hook shell.
+
 ---
 
 ## 1. Giới thiệu & Mục tiêu Dự án

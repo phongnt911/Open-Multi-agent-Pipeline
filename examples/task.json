@@ -1,0 +1,4 @@
+{
+  "specification": "Implement calculate_discount(invoice) using existing domain rules and tests.",
+  "allowed_files_to_modify": ["src/services/billing.py"]
+}

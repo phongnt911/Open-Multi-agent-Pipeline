@@ -1,0 +1,9 @@
+Bạn là AI thực thi FND-02 của dự án Open-Multi-agent-Pipeline. AI điều phối của chủ dự án giao việc và review; bạn không tự nghiệm thu.
+
+Đọc AGENTS.md, README.md, docs/COORDINATION.md, docs/CONTRIBUTING.md, docs/CONTRACTS.md, docs/SDD.md và toàn bộ docs/tasks/FND-02.md trước khi sửa. Task document là nguồn acceptance, phạm vi và quyền chính thức.
+
+Ghi HEAD SHA, git status và owner; bảo toàn thay đổi có sẵn. Chỉ thực hiện FND-02: type hints cho code MVP, phân biệt lỗi input/operation và sửa runner mặc định để zero tests luôn thất bại cả khi Python optimize. Kiểm thử đúng argv do omp init sinh, gồm zero/pass/fail ở cả hai chế độ. Chứng minh regression trên baseline rồi chạy python tools/check.py và git diff --check sau sửa.
+
+Không sửa workflow/checker/quy chuẩn để làm test pass; không thêm dependency runtime, tự refactor kiến trúc, đổi schema/recovery hoặc nhận DAT-01. Không gọi AI thật, spawn agent phụ, commit, push hay merge. Nếu bị chặn, báo bằng chứng và tiếp tục phần độc lập an toàn.
+
+Bàn giao docs/handoffs/FND-02.md: base SHA, danh sách file/diff, mapping AC1–AC7, regression trước/sau, lệnh test/OS/Python/số test/exit code, kiểm tra chưa chạy và rủi ro ngoài scope. Chuyển task sang REVIEW rồi dừng để AI điều phối review. Không ghi DONE hoặc tự tuyên bố ACCEPTED.
