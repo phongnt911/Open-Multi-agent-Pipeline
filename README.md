@@ -22,8 +22,15 @@ lệnh shell. Chuẩn bị dependency và tests trong repo trước khi chạy.
 
 Task mẫu: `examples/task.json`. File cho phép phải là đường dẫn tương đối
 chính xác dùng `/`, không glob. Không cho phép Worker sửa tests hoặc config
-runner. Chọn lệnh test thất bại khi không tìm thấy test; exit code 0 của lệnh
-rỗng không chứng minh tính đúng đắn. Dữ liệu thiết kế cũ ở `examples/legacy-*`.
+runner. `omp init` sinh lệnh test kiểm tra tường minh: 0 test hoặc test lỗi
+đều trả nonzero, kể cả khi chạy với `PYTHONOPTIMIZE=1`; exit code 0 của lệnh
+rỗng không chứng minh tính đúng đắn. CLI phân biệt lỗi input/config
+(`InputError`) với lỗi operation/process (`OperationError`), in `OMP: ...`,
+trả nonzero và không in traceback hay argv Worker cho lỗi dự kiến. Argv chứa
+NUL bị từ chối trước side effect; executable không tồn tại được báo
+`OperationError` có cause. Timeout của Worker/cleanup được thay bằng label an
+toàn, không đưa argv vào stderr hay `last_error`. Dữ liệu thiết kế cũ ở
+`examples/legacy-*`.
 
 Kết quả nằm trong `.omp/runs/<run_id>/checkout`, logs nằm cạnh checkout.
 OMP bỏ remote và không tự push hoặc áp dụng thay đổi vào repo nguồn.

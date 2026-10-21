@@ -5,6 +5,11 @@
 MVP đặt logic trong `omp_core/main.py`; config/task chưa versioned, state chỉ
 ghi schema_version lúc tạo và chưa validate đầy đủ khi resume. Đây là nợ DAT-01,
 không phải cam kết schema ổn định. Legacy JSON chỉ là tư liệu, không dùng chạy.
+MVP đã tách `InputError` (input/config trước side effect) khỏi `OperationError`
+(Git, lock, process, scope). Argv chứa NUL bị từ chối trước side effect; lỗi
+spawn được chuẩn hóa thành `OperationError` có cause; timeout/cleanup timeout
+không echo argv. Chưa có mã lỗi ổn định, retryability hoặc redaction toàn diện,
+nên contract `error` bên dưới vẫn là mục tiêu của DAT-01/PROV-02.
 
 ## Bất biến bắt buộc
 
