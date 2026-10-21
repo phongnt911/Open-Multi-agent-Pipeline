@@ -1,0 +1,12 @@
+{
+  "task_id": "TASK-01",
+  "feature_id": "FEAT-001",
+  "sequence_order": 1,
+  "status": "PENDING",
+  "title": "Xây dựng module tính chiết khấu hóa đơn",
+  "allowed_files_to_modify": ["src/services/billing.py"],
+  "read_only_context_files": ["src/models/invoice.py", "src/constants.py"],
+  "associated_test_files": ["tests/test_billing.py"],
+  "specification": "Viết hàm calculate_discount(invoice) trả về số tiền giảm giá hợp lệ.",
+  "last_error_trace": null
+}

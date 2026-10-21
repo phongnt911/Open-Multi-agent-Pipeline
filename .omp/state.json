@@ -1,0 +1,20 @@
+{
+  "pipeline_status": "RUNNING_WORKER",
+  "current_feature_id": "FEAT-001",
+  "current_task_id": "TASK-01",
+  "active_role": "worker",
+  "active_cli": "opencode_free",
+  "current_leader_cli": "codex_plus",
+  "cli_health": {
+    "codex_plus": { "status": "READY", "cooldown_until": null },
+    "gemini_pro": { "status": "READY", "cooldown_until": null },
+    "opencode_free": { "status": "BUSY", "cooldown_until": null }
+  },
+  "metrics": {
+    "tasks_total": 3,
+    "tasks_completed": 0,
+    "current_task_retry": 0,
+    "blocked_destructive_cmds": 0
+  },
+  "last_updated": "2026-10-20T09:50:00+07:00"
+}

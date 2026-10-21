@@ -1,0 +1,36 @@
+{
+  "project_name": "omp-workspace",
+  "max_worker_retries": 3,
+  "default_timeout_seconds": 180,
+  "shared_database": {
+    "env_var_name": "DATABASE_URL",
+    "connection_string": "sqlite:///.omp/shared_dev.db",
+    "migration_command": "alembic upgrade head"
+  },
+  "test_runner": {
+    "command": "pytest --tb=short -q",
+    "test_directory": "tests/"
+  },
+  "cli_providers": {
+    "codex_plus": {
+      "command_template": "codex --quiet --prompt-file {prompt_path}",
+      "quota_error_patterns": ["rate_limit", "429", "quota exceeded", "usage limit"],
+      "cooldown_minutes": 60
+    },
+    "gemini_pro": {
+      "command_template": "gemini -p {prompt_path}",
+      "quota_error_patterns": ["RESOURCE_EXHAUSTED", "429", "QuotaFailure"],
+      "cooldown_minutes": 30
+    },
+    "opencode_free": {
+      "command_template": "opencode run --file {prompt_path}",
+      "quota_error_patterns": ["429", "insufficient_quota", "timeout"],
+      "cooldown_minutes": 15
+    }
+  },
+  "role_routing": {
+    "scout": ["gemini_pro", "opencode_free"],
+    "leader": ["codex_plus", "gemini_pro", "opencode_free"],
+    "worker": ["opencode_free", "gemini_pro", "codex_plus"]
+  }
+}

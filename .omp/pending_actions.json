@@ -1,0 +1,7 @@
+{
+  "requested_by_task": "TASK-01",
+  "package_installs": ["pydantic-extra-types==2.1.0"],
+  "db_migrations": ["ALTER TABLE invoices ADD COLUMN discount_code VARCHAR(32);"],
+  "reason": "Cần thêm cột discount_code để lưu mã khuyến mãi theo yêu cầu của test_billing.py",
+  "leader_approval_status": "WAITING_APPROVAL"
+}
