@@ -31,14 +31,16 @@ class PipelineTests(unittest.TestCase):
         return subprocess.check_output(["git", "-C", str(self.root), *args], stderr=subprocess.PIPE).decode().strip()
 
     def prepare(self, worker, test="import app; assert app.value == 1"):
-        config = {"worker_argv": [sys.executable, "-c", worker],
+        config = {"schema_version": 1,
+                  "worker_argv": [sys.executable, "-c", worker],
                   "test_argv": [sys.executable, "-B", "-c", test], "timeout_seconds": 10}
-        task = {"specification": "Set value to 1", "allowed_files_to_modify": ["app.py"]}
+        task = {"schema_version": 1, "specification": "Set value to 1",
+                "allowed_files_to_modify": ["app.py"]}
         validate(config, task)
         self.checkpoint = self.root / ".omp/state.json"
-        save(self.checkpoint, {"run_id": "integration", "phase": "preparing",
-                              "base_commit": self.base, "config": config,
-                              "task": task, "child_pid": None})
+        save(self.checkpoint, {"schema_version": 2, "run_id": "integration",
+                              "phase": "preparing", "base_commit": self.base,
+                              "config": config, "task": task, "child_pid": None})
 
     def state(self):
         return json.loads(self.checkpoint.read_text())
