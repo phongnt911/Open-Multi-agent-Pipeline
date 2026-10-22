@@ -19,7 +19,7 @@
 | File | SHA-256 | Trạng thái |
 | --- | --- | --- |
 | `omp_core/main.py` | `982225ec9f60349fd9efca1ee0dba50b9310f239e2610c39d4754f5a598140d0` | Modified (R1 error chaining & PID clean) |
-| `tests/test_crash_recovery.py` | `97088625c781ae5230f34318cb71503a244b96bc0c324c36ab7b184e2318d78f` | Created mới (21 tests bao phủ R1–R4) |
+| `tests/test_crash_recovery.py` | `19d54f6fc55439b70090bf8ad0bca01efe437da2074146de8b8b5043abd74820` | Modified (sửa G1-CI-R1: cấp Git identity trong amend invocation) |
 | `docs/decisions/0003-crash-recovery-matrix.md` | `a4421fb14d2861a76110117690006310f1e7fee15a96aba2b055cef08e3ab412` | Created mới (Ma trận M1–M9 cập nhật) |
 | `docs/CONTRACTS.md` | `671f9ade9ebf3f8d9d30cd59dbcf1ae894f1c6ad04454aa68e230d802337a934` | Modified |
 | `docs/SDD.md` | `c64383fc7c6e85e14c66f38ccf7e68ade8dc28a507bf0885fff25cb77e017fce` | Modified |
@@ -72,6 +72,13 @@
   - Giữ nguyên `test_atomic_save_cleanup_error_does_not_mask_original_error` (M8b) và `test_atomic_save_failure_on_new_file_does_not_create_corrupt_checkpoint` (M8c).
 - **Kiểm chứng**:
   - Toàn bộ 7 atomic save tests đều PASS.
+
+### 5. G1-CI-R1 — Cấp Git identity trực tiếp trong invocation amend của fixture test M7b
+- **Nguyên nhân**: Tại `test_commit_before_complete_with_corrupted_commit_is_rejected` (`tests/test_crash_recovery.py:399-402`), test tạo commit giả mạo bằng `git commit --amend` trong checkout clone mà không truyền identity. Trên runner CI sạch không có Git global identity, lệnh amend thoát với mã 128 (`Committer identity unknown`) trước khi kịp chạy đến logic đối soát recovery, làm CI đỏ cả 4 jobs.
+- **Giải pháp**: Cấp trực tiếp `-c user.name="OMP Test" -c user.email="test@localhost"` vào mảng tham số của `git commit --amend`. Đảm bảo test độc lập, hermetic, không thay đổi kịch bản kiểm thử hay các assertion recovery, không can thiệp cấu hình toàn máy hay CI workflow.
+- **Kiểm chứng**:
+  - Tái hiện lỗi trên máy local với môi trường cô lập Git (`GIT_CONFIG_GLOBAL=os.devnull`, `GIT_CONFIG_NOSYSTEM=1`, unset author/committer env): lệnh amend ban đầu ném `CalledProcessError(128)` (Fail-Before).
+  - Sau khi sửa: test đơn lẻ và toàn bộ 111 tests đều PASS 100% trong môi trường cô lập Git (Pass-After).
 
 ## Tiêu chí nghiệm thu (Acceptance Mapping)
 

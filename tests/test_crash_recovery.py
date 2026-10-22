@@ -397,7 +397,20 @@ class StagingAndCommitInterruptionTests(CrashRecoveryTestCase):
 
         checkout = self.root / ".omp/runs" / str(simulated["run_id"]) / "checkout"
         subprocess.check_call(
-            ["git", "-C", str(checkout), "commit", "--amend", "-m", "tampered subject", "--allow-empty"],
+            [
+                "git",
+                "-C",
+                str(checkout),
+                "-c",
+                "user.name=OMP Test",
+                "-c",
+                "user.email=test@localhost",
+                "commit",
+                "--amend",
+                "-m",
+                "tampered subject",
+                "--allow-empty",
+            ],
             stderr=subprocess.DEVNULL,
         )
 
