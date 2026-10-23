@@ -90,6 +90,10 @@ Không import CLI từ lớp thấp; không để provider tự ghi state hoặc
   khi clone/checkout dở; ghi nhận giới hạn spawn-gap và bằng chứng Windows.
 - `process`: owner identity, PID + dấu nhận diện đời tiến trình/OS containment;
   PID đơn lẻ không đủ chứng minh ownership (PROC-01/PROC-02).
+- `process lock`: `run`/`resume`/`init` giữ OS lock độc quyền non-blocking;
+  lock tự nhả khi process chết, không unlink lock file để phá stale; `status`
+  chỉ đọc và không lấy lock. OS lock chỉ serialize orchestrator, không thay
+  `child_pid` guard hoặc containment process tree (PROC-01/PROC-02).
 - `limits`: attempt/call/time budgets hữu hạn; restart không reset budget
   (PROV-02/PIPE-01).
 - `error`: mã lỗi ổn định, phase/operation, retryability, message đã redaction;
