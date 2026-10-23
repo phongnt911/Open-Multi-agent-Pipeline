@@ -34,18 +34,27 @@ PID còn lưu chặn resume. Sau crash cứng, người vận hành xác minh c�
 với thay đổi hiện tại; test lỗi không tự gọi lại Worker hay đổi provider.
 Resume trên checkpoint v1 dở dang bị chặn trước mutation để bảo toàn dữ liệu.
 
+Trên Windows, process runner tạo Worker/test suspended trong Job Object riêng
+với `KILL_ON_JOB_CLOSE`, gắn job ngay bằng `PROC_THREAD_ATTRIBUTE_JOB_LIST` và
+chỉ resume sau khi save `child_pid`. Root exit còn con/cháu, timeout, Ctrl+C
+hoặc cleanup lỗi đều terminate job trước khi fail-closed. Chỉ xóa `child_pid`
+khi job rỗng; owner hard-kill làm OS đóng job handle và dừng cây. Job Object
+không phải sandbox quyền OS.
+
 ## Ranh giới tin cậy
 
 MVP giả định Worker hợp tác và sandbox provider phù hợp. Clone cách ly thay đổi
-Git, không cách ly quyền OS, mạng hay DB. Hook PowerShell, hash cạnh file và
-whitelist sau thực thi không phải ranh giới bảo mật. Tests/config phải chuẩn
-bị trước và nằm ngoài phạm vi task. File ignored và Git metadata chưa được
-bảo vệ trước Worker đối kháng. Không dùng DB production.
+Git, không cách ly quyền OS, mạng hay DB. Job Object trên Windows chỉ kiểm soát
+vòng đời process, không hạn chế file/network/credential. Hook PowerShell, hash
+cạnh file và whitelist sau thực thi không phải ranh giới bảo mật. Tests/config
+phải chuẩn bị trước và nằm ngoài phạm vi task. File ignored và Git metadata
+chưa được bảo vệ trước Worker đối kháng. Không dùng DB production.
 
 ## Tiếp theo
 
 1. Cách ly quyền OS, test runner và vault ngoài quyền ghi của Worker.
-2. Kiểm thử crash cứng và Windows Job Object cho cây tiến trình.
+2. Nghiệm thu PROC-02 (container Windows native), rồi PROC-03 recovery command
+   có đối soát thay vì sửa `child_pid`/phase thủ công.
 3. Retry/failover hữu hạn sau khi xác nhận provider cũ đã dừng.
 4. Planner/reviewer có ngân sách gọi; diff tính từ baseline feature.
 5. Migration trên DB phát triển riêng, nhật ký và quy tắc chạy lại.
