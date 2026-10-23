@@ -419,6 +419,15 @@ class ProcessLockTests(unittest.TestCase):
         owner.wait(timeout=10)
         self.assertIsNotNone(owner.poll())
         self.assertTrue((self.root / ".omp/lock").exists())
+        if os.name == "nt":
+            self.assertTrue(
+                self._wait_pid_gone(pid, 10),
+                "Windows containment did not stop the worker after owner hard-kill",
+            )
+        else:
+            # POSIX has no PROC-02 job containment: SIGKILL of the owner leaves
+            # the worker alive until its fixture release, matching baseline.
+            self.assertTrue(process_alive(pid))
 
         resume = self.run_omp("resume")
         self.assertNotEqual(resume.returncode, 0, resume.stderr)
@@ -426,10 +435,12 @@ class ProcessLockTests(unittest.TestCase):
         self.assertNotIn("holds the project lock", resume.stderr)
         self.assertEqual(self.state_bytes(), state_before)
         self.assertEqual(self.worker_starts(), [pid])
-        self.assertTrue(process_alive(pid))
-
-        self.release_worker()
-        self.assertEqual(self.state_bytes(), state_before)
+        if os.name == "nt":
+            self.assertFalse(process_alive(pid))
+        else:
+            self.assertTrue(process_alive(pid))
+            self.release_worker()
+            self.assertEqual(self.state_bytes(), state_before)
 
     def test_pid_only_metadata_does_not_grant_lock_or_kill(self) -> None:
         """PID-only metadata is not ownership; no incarnation registry is used."""

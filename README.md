@@ -69,7 +69,14 @@ có thể fetch commit từ clone rồi cherry-pick thủ công.
 - `run`/`resume` validate config, task và state trước khi tạo `.omp/lock` rồi
   đọc/validate lại sau khi lấy lock trước khi clone, chạy Worker/test hoặc ghi
   checkpoint. `status` chỉ đọc và validate, không chuẩn hóa hay ghi state.
-- Timeout/Ctrl+C cố dừng cây tiến trình. Sau crash cứng, PID còn lưu sẽ chặn
+- Windows: mỗi Worker/test chạy trong Job Object riêng với
+  `KILL_ON_JOB_CLOSE`; process được tạo suspended với job-list nên containment
+  có hiệu lực trước khi resume, không có gap create/attach. `child_pid` được
+  save trước resume. Owner bị kill cứng làm OS đóng job handle và dừng cả cây;
+  timeout/Ctrl+C/root exit còn con bị terminate có giới hạn. Chỉ xóa
+  `child_pid` khi job đã rỗng; cleanup không chứng minh được thì giữ PID và
+  fail-closed. Không fallback sang spawn không containment.
+- POSIX giữ process group + SIGKILL. Sau crash cứng, PID còn lưu sẽ chặn
   resume: phải xác minh tiến trình và các con đã dừng rồi đặt `child_pid`
   thành `null` trong state. Không tự nhận diện tiến trình qua PID tái sử dụng.
 - Worker dở được gọi lại trong phiên mới với thay đổi hiện tại. Test thất bại
@@ -78,8 +85,9 @@ có thể fetch commit từ clone rồi cherry-pick thủ công.
 - Clone bị gián đoạn tại `preparing` cần lưu trữ run và di chuyển state cũ
   ra ngoài trước khi bắt đầu run mới; chưa tự phục hồi bước clone.
 - **Clone không phải sandbox OS.** MVP dành cho Worker hợp tác, chạy với
-  sandbox của provider. Cùng tài khoản OS vẫn có thể truy cập repo nguồn,
-  runtime, Git metadata, file ignored và môi trường ngoài repo. Kiểm tra
+  sandbox của provider. Job Object chỉ kiểm soát vòng đời process, không hạn
+  chế quyền file/network/credential. Cùng tài khoản OS vẫn có thể truy cập repo
+  nguồn, runtime, Git metadata, file ignored và môi trường ngoài repo. Kiểm tra
   whitelist sau thực thi phát hiện sai lệch, không ngăn tác động trước đó.
 - Chưa có immutable vault hoặc test runner cách ly. Không dùng cho Worker
   đối kháng hoặc DB production. Không có migration, cài package tự động,
@@ -91,8 +99,9 @@ có thể fetch commit từ clone rồi cherry-pick thủ công.
 python tools/check.py
 ```
 
-Tests dùng provider giả cục bộ, không gọi AI hay tốn quota. Xem `docs/SDD.md`
-cho thiết kế hiện hành và `docs/SRS.md` cho tầm nhìn dài hạn.
+Tests dùng provider giả cục bộ, không gọi AI hay tốn quota. Test containment
+native chỉ chạy trên Windows; POSIX chạy baseline và bỏ qua test Windows. Xem
+`docs/SDD.md` cho thiết kế hiện hành và `docs/SRS.md` cho tầm nhìn dài hạn.
 
 ## Phát triển dự án
 
@@ -105,6 +114,8 @@ trên Python 3.10/3.12, không gọi AI thật hoặc tự publish.
 
 [Quy trình điều phối/review AI](docs/COORDINATION.md) quy định quyền giao việc
 và nghiệm thu. FND-01/FND-02, G0, [DAT-01](docs/tasks/DAT-01.md) và
-[REC-01](docs/tasks/REC-01.md) đã được triển khai; tiếp theo [REC-02](docs/tasks/REC-02.md).
-G1 chưa đóng. AI thực thi bàn giao để reviewer nghiệm thu, không
-tự push main hoặc nhận tiếp task khác.
+[REC-01](docs/tasks/REC-01.md), [REC-02](docs/tasks/REC-02.md) đã nghiệm thu và tích hợp.
+G1 DONE theo [quyết định điều phối](docs/reviews/G1-CLOSURE.md); PROC-01 đã
+merge/nghiệm thu. [PROC-02](docs/tasks/PROC-02.md) đang ở trạng thái REVIEW,
+G2 vẫn mở. AI thực thi bàn giao để reviewer nghiệm thu, không tự push main
+hoặc nhận tiếp task khác.

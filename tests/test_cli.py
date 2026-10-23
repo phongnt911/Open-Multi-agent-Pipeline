@@ -261,20 +261,13 @@ class CliErrorTests(CliTestCase):
         ) -> None:
             raise subprocess.TimeoutExpired(["worker", f"--token={secret}"], 10)
 
-        real_popen = pipeline.subprocess.Popen
-
-        class RoutingPopen:
-            def __new__(cls, argv: object, *args: object, **kwargs: object) -> object:
-                if (isinstance(argv, (list, tuple)) and argv
-                        and argv[0] == "git"):
-                    return real_popen(argv, *args, **kwargs)
-                return FakeProcess()
-
         stderr = io.StringIO()
         with patch.object(sys, "argv", [
                 "omp", "--root", str(self.root), "run", str(task)
              ]), \
-                patch.object(pipeline.subprocess, "Popen", RoutingPopen), \
+                patch.object(
+                    pipeline, "_start_process",
+                    return_value=(FakeProcess(), None)), \
                 patch.object(pipeline, "stop", side_effect=cleanup_timeout), \
                 redirect_stderr(stderr):
             with self.assertRaises(SystemExit) as raised:

@@ -8,8 +8,14 @@ import re
 import subprocess
 import sys
 import tempfile
-from typing import Iterator, TypeAlias, TypedDict, cast
+from typing import BinaryIO, Iterator, TypeAlias, TypedDict, cast
 import uuid
+
+from .windows_job import (
+    WindowsJobCleanupTimeout,
+    WindowsJobError,
+    WindowsJobProcess,
+)
 
 
 JsonScalar: TypeAlias = str | int | float | bool | None
@@ -744,21 +750,84 @@ def _timeout_error(
     return subprocess.TimeoutExpired(label, exc.timeout)
 
 
-def stop(process: subprocess.Popen[bytes], label: str = "child") -> None:
-    """Stop the child process tree and wait for the child to exit.
+CLEANUP_TIMEOUT_SECONDS = 10
 
-    Side effects:
-        Sends SIGKILL to the process group on POSIX or runs ``taskkill /T /F``
-        on Windows. Waits at most 10 seconds.
 
-    Raises:
-        subprocess.TimeoutExpired: the child did not exit within 10 seconds.
-            The exception contains *label* and the timeout, not the original
-            argv.
+def _start_process(
+    argv: list[str],
+    checkout: Path,
+    log_path: Path,
+    prompt: str | None,
+    run_dir: Path,
+) -> tuple[subprocess.Popen[bytes] | WindowsJobProcess, BinaryIO | None]:
+    """Start one process, using Kill-on-close Job containment on Windows.
+
+    On Windows the returned process is suspended and already attached to the
+    job. The caller must save ``child_pid`` and then call ``resume`` so no
+    Worker code executes before containment and the checkpoint are in place.
     """
     if os.name == "nt":
-        subprocess.run(["taskkill", "/PID", str(process.pid), "/T", "/F"],
-                       stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        process = WindowsJobProcess.start(
+            argv,
+            checkout,
+            log_path,
+            stdin_text=prompt or "",
+            temp_dir=run_dir,
+        )
+        return process, None
+    log = log_path.open("ab")
+    try:
+        process = subprocess.Popen(
+            argv,
+            cwd=checkout,
+            stdin=subprocess.PIPE,
+            stdout=log,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+        )
+    except BaseException:
+        log.close()
+        raise
+    return process, log
+
+
+def _tree_stopped(process: subprocess.Popen[bytes] | WindowsJobProcess) -> bool:
+    """Return whether the whole process tree is proven stopped."""
+    if isinstance(process, WindowsJobProcess):
+        return process.tree_stopped
+    return process.poll() is not None
+
+
+def stop(
+    process: subprocess.Popen[bytes] | WindowsJobProcess, label: str = "child"
+) -> None:
+    """Stop the child process tree and wait for it to exit.
+
+    Side effects:
+        On Windows, terminates the owned job and waits boundedly for an empty
+        job. On POSIX, sends SIGKILL to the process group. A non-contained
+        Windows process still uses bounded ``taskkill /T /F`` for compatibility.
+
+    Raises:
+        subprocess.TimeoutExpired: cleanup did not finish within the bound.
+            The exception contains *label* and the timeout, not argv.
+        WindowsJobError: job termination or accounting failed.
+    """
+    if isinstance(process, WindowsJobProcess):
+        try:
+            process.terminate_tree(CLEANUP_TIMEOUT_SECONDS)
+        except WindowsJobCleanupTimeout as exc:
+            raise subprocess.TimeoutExpired(
+                f"{label} cleanup", CLEANUP_TIMEOUT_SECONDS
+            ) from exc
+        return
+    if os.name == "nt":
+        subprocess.run(
+            ["taskkill", "/PID", str(process.pid), "/T", "/F"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=CLEANUP_TIMEOUT_SECONDS,
+        )
     else:
         import signal
         try:
@@ -767,25 +836,162 @@ def stop(process: subprocess.Popen[bytes], label: str = "child") -> None:
             pass
     cleanup_timeout: subprocess.TimeoutExpired | None = None
     try:
-        process.wait(timeout=10)
+        process.wait(timeout=CLEANUP_TIMEOUT_SECONDS)
     except subprocess.TimeoutExpired as exc:
         cleanup_timeout = _timeout_error(f"{label} cleanup", exc)
     if cleanup_timeout is not None:
         raise cleanup_timeout
 
 
-def _public_operation_error(label: str, exc: BaseException) -> BaseException:
+def _redact_diagnostic(
+    text: str,
+    argv: list[str] | None = None,
+    prompt: str | None = None,
+) -> str:
+    """Redact command-line values and prompt text from a diagnostic message."""
+    fragments: set[str] = set()
+    for argument in argv or []:
+        if argument:
+            fragments.add(argument)
+            if argument.startswith("-") and "=" in argument:
+                fragments.add(argument.split("=", 1)[1])
+    if prompt:
+        fragments.add(prompt)
+    for fragment in sorted(fragments, key=len, reverse=True):
+        text = text.replace(fragment, "<redacted>")
+    return text or "<no detail>"
+
+
+def _clone_diagnostic(exc: BaseException, message: str) -> BaseException:
+    """Create a sanitized exception of the same broad public class.
+
+    The clone never links the original exception, because its ``cmd``,
+    filename, or context could still contain Worker argv or a token.
+    """
+    if isinstance(exc, WindowsJobCleanupTimeout):
+        return WindowsJobCleanupTimeout(message)
+    if isinstance(exc, WindowsJobError):
+        return WindowsJobError(message)
+    if isinstance(exc, OperationError):
+        return OperationError(message)
+    if isinstance(exc, OSError):
+        return OSError(message)
+    if not isinstance(exc, Exception):
+        try:
+            return type(exc)(message)
+        except Exception:
+            return OperationError(message)
+    return OperationError(message)
+
+
+def _clone_diagnostic_chain(
+    exc: BaseException,
+    argv: list[str] | None = None,
+    prompt: str | None = None,
+    seen: dict[int, BaseException] | None = None,
+) -> BaseException:
+    """Clone *exc* and its cause/context chain without linking raw errors.
+
+    Every message is redacted before it is copied.  The clone keeps the broad
+    public type of each node, so a nested ``WindowsJobError`` still exposes its
+    stage and WinError text without exposing argv, prompt, or a raw traceback.
+    """
+    if seen is None:
+        seen = {}
+    existing = seen.get(id(exc))
+    if existing is not None:
+        return existing
+    message = _redact_diagnostic(
+        str(exc) or type(exc).__name__, argv, prompt
+    )
+    clone = _clone_diagnostic(exc, message)
+    seen[id(exc)] = clone
+    for attribute in ("__cause__", "__context__"):
+        nested = getattr(exc, attribute)
+        if nested is None:
+            continue
+        sanitized = _clone_diagnostic_chain(nested, argv, prompt, seen)
+        if sanitized is not clone:
+            setattr(clone, attribute, sanitized)
+    return clone
+
+
+def _public_operation_error(
+    label: str,
+    exc: BaseException,
+    argv: list[str] | None = None,
+    prompt: str | None = None,
+) -> BaseException:
     """Return an argv-free public form of an operation error."""
     if isinstance(exc, subprocess.TimeoutExpired):
         return _timeout_error(label, exc)
-    return exc
+    message = _redact_diagnostic(
+        str(exc) or type(exc).__name__, argv, prompt
+    )
+    if not isinstance(exc, Exception):
+        return _clone_diagnostic_chain(exc, argv, prompt)
+    if isinstance(exc, WindowsJobError):
+        public = OperationError(
+            f"{label} containment failed: {message}"
+        )
+        public.__cause__ = _clone_diagnostic_chain(exc, argv, prompt)
+        return public
+    if isinstance(exc, OperationError):
+        return _clone_diagnostic_chain(exc, argv, prompt)
+    if isinstance(exc, OSError):
+        return _clone_diagnostic_chain(exc, argv, prompt)
+    return OperationError(f"{label} failed: {message}")
 
 
-def _public_cleanup_error(label: str, exc: BaseException) -> BaseException:
+def _public_cleanup_error(
+    label: str,
+    exc: BaseException,
+    argv: list[str] | None = None,
+    prompt: str | None = None,
+) -> BaseException:
     """Return an argv-free public form of a cleanup error."""
     if isinstance(exc, subprocess.TimeoutExpired):
         return _timeout_error(f"{label} cleanup", exc)
-    return OperationError(f"{label} cleanup failed: {type(exc).__name__}")
+    message = _redact_diagnostic(
+        str(exc) or type(exc).__name__, argv, prompt
+    )
+    return OperationError(f"{label} cleanup failed: {message}")
+
+
+def _cleanup_root_cause(
+    label: str,
+    exc: BaseException,
+    argv: list[str] | None = None,
+    prompt: str | None = None,
+) -> WindowsJobError | None:
+    """Return a sanitized Win32 cleanup root cause, if one exists."""
+    root: BaseException | None = None
+    if isinstance(exc, subprocess.TimeoutExpired):
+        candidate = exc.__cause__
+        if isinstance(candidate, WindowsJobError):
+            root = candidate
+    elif isinstance(exc, WindowsJobError):
+        root = exc
+    if root is None:
+        return None
+    message = _redact_diagnostic(
+        str(root) or type(root).__name__, argv, prompt
+    )
+    if isinstance(root, WindowsJobCleanupTimeout):
+        return WindowsJobCleanupTimeout(message)
+    return WindowsJobError(message)
+
+
+def _public_save_error(
+    exc: BaseException,
+    argv: list[str] | None = None,
+    prompt: str | None = None,
+) -> BaseException:
+    """Return a sanitized final-save error without original context."""
+    message = _redact_diagnostic(
+        str(exc) or type(exc).__name__, argv, prompt
+    )
+    return _clone_diagnostic(exc, message)
 
 
 def execute(
@@ -799,90 +1005,116 @@ def execute(
 ) -> None:
     """Run one Worker or test command inside *checkout*.
 
+    On Windows the process is created suspended in a Job Object with
+    ``KILL_ON_JOB_CLOSE``. ``child_pid`` is saved before the initial thread is
+    resumed; the PID is cleared only after the job is positively empty.
+
     Side effects:
         Appends stdout/stderr to ``<label>.log`` under *run_dir*, records
         ``child_pid`` in *state*/checkpoint before sending input, and clears it
-        after the process exits. On any exception the child tree is stopped.
+        after the process tree is stopped. On any exception the child tree is
+        stopped.
 
     Raises:
-        OperationError: the command cannot be started or exits nonzero. The
-            log path or failure class is included without echoing argv.
+        OperationError: the command cannot be started, exits nonzero, or leaves
+            an uncontained/uncertain tree. The log path or failure class is
+            included without echoing argv.
         subprocess.TimeoutExpired: the command or its cleanup exceeds the
             configured timeout. The exception is sanitized to a label.
         KeyboardInterrupt/SystemExit: propagated after stopping the child.
     """
-    with (run_dir / f"{label}.log").open("ab") as log:
-        options: dict[str, object] = (
-            {"creationflags": subprocess.CREATE_NEW_PROCESS_GROUP}
-            if os.name == "nt"
-            else {"start_new_session": True}
-        )
+    log_path = run_dir / f"{label}.log"
+    process: subprocess.Popen[bytes] | WindowsJobProcess
+    log: BinaryIO | None
+    try:
+        process, log = _start_process(argv, checkout, log_path, prompt, run_dir)
+    except OSError as exc:
+        raise OperationError(
+            f"Cannot start {label}: {type(exc).__name__}"
+        ) from exc
+    except ValueError as exc:
+        raise OperationError(
+            f"Cannot start {label}: invalid argument"
+        ) from exc
+
+    state["child_pid"] = process.pid
+    operation_error: BaseException | None = None
+    cleanup_error: BaseException | None = None
+    save_error: BaseException | None = None
+    try:
         try:
-            process = subprocess.Popen(
-                argv,
-                cwd=checkout,
-                stdin=subprocess.PIPE,
-                stdout=log,
-                stderr=subprocess.STDOUT,
-                **options,
+            save(checkpoint, state)
+            if isinstance(process, WindowsJobProcess):
+                process.resume()
+            process.communicate(
+                (prompt or "").encode("utf-8"),
+                timeout=state["config"]["timeout_seconds"],
             )
-        except OSError as exc:
-            raise OperationError(
-                f"Cannot start {label}: {type(exc).__name__}"
-            ) from exc
-        except ValueError as exc:
-            raise OperationError(
-                f"Cannot start {label}: invalid argument"
-            ) from exc
-        state["child_pid"] = process.pid
-        operation_error: BaseException | None = None
-        cleanup_error: BaseException | None = None
-        save_error: BaseException | None = None
-        try:
-            try:
-                save(checkpoint, state)
-                process.communicate(
-                    (prompt or "").encode("utf-8"),
-                    timeout=state["config"]["timeout_seconds"],
+            if process.returncode:
+                raise OperationError(
+                    f"{label} exited {process.returncode}; "
+                    f"see {log_path}"
                 )
-                if process.returncode:
-                    raise OperationError(
-                        f"{label} exited {process.returncode}; "
-                        f"see {run_dir / (label + '.log')}"
-                    )
-            except BaseException as exc:
-                operation_error = exc
-            if operation_error is not None:
-                try:
-                    stop(process, label)
-                except BaseException as exc:
-                    cleanup_error = exc
-        finally:
-            if process.poll() is not None:
-                state["child_pid"] = None
-            try:
-                save(checkpoint, state)
-            except BaseException as exc:
-                save_error = exc
-
-        primary_error: BaseException | None = None
+        except BaseException as exc:
+            operation_error = exc
         if operation_error is not None:
-            public_operation = _public_operation_error(label, operation_error)
-            if cleanup_error is not None:
-                public_cleanup = _public_cleanup_error(label, cleanup_error)
-                public_cleanup.__cause__ = public_operation
-                primary_error = public_cleanup
-            else:
-                primary_error = public_operation
-        elif cleanup_error is not None:
-            primary_error = _public_cleanup_error(label, cleanup_error)
+            try:
+                stop(process, label)
+            except BaseException as exc:
+                cleanup_error = exc
+    finally:
+        if _tree_stopped(process):
+            state["child_pid"] = None
+        try:
+            save(checkpoint, state)
+        except BaseException as exc:
+            save_error = exc
+        if log is not None:
+            try:
+                log.close()
+            except OSError:
+                pass
+        if isinstance(process, WindowsJobProcess):
+            process.close()
 
-        if save_error is not None:
-            if primary_error is not None:
-                save_error.__cause__ = primary_error
-            raise save_error
+    primary_error: BaseException | None = None
+    if operation_error is not None:
+        public_operation = _public_operation_error(
+            label, operation_error, argv, prompt
+        )
+        if cleanup_error is not None:
+            public_cleanup = _public_cleanup_error(
+                label, cleanup_error, argv, prompt
+            )
+            cleanup_root = _cleanup_root_cause(
+                label, cleanup_error, argv, prompt
+            )
+            if cleanup_root is not None:
+                cleanup_root.__cause__ = public_operation
+                public_cleanup.__cause__ = cleanup_root
+            else:
+                public_cleanup.__cause__ = public_operation
+            primary_error = public_cleanup
+        else:
+            primary_error = public_operation
+    elif cleanup_error is not None:
+        public_cleanup = _public_cleanup_error(
+            label, cleanup_error, argv, prompt
+        )
+        cleanup_root = _cleanup_root_cause(
+            label, cleanup_error, argv, prompt
+        )
+        if cleanup_root is not None:
+            public_cleanup.__cause__ = cleanup_root
+        primary_error = public_cleanup
+
+    if save_error is not None:
+        public_save = _public_save_error(save_error, argv, prompt)
         if primary_error is not None:
-            raise primary_error
+            public_save.__cause__ = primary_error
+        raise public_save
+    if primary_error is not None:
+        raise primary_error
 
 
 def check_scope(checkout: Path, state: State) -> None:

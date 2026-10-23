@@ -8,8 +8,9 @@ DAT-01 đã khóa schema dữ liệu MVP; REC-01 nâng cấp checkpoint lên
 tường minh (`completion_kind`). Config/task vẫn giữ `schema_version: 1`;
 input cũ không có version được nhận như legacy v0 và chuẩn hóa trong bộ nhớ.
 State v1 cũ được hỗ trợ đọc/status ở chế độ read-only không rewrite đĩa; resume
-trên state v1 chưa hoàn tất bị chặn trước mutation. Migration tự động, crash
-matrix sâu và process containment thuộc REC-02/PROC.
+trên state v1 chưa hoàn tất bị chặn trước mutation. Migration tự động và crash
+matrix sâu thuộc REC-02/PROC; containment Windows đã có primitive native ở
+PROC-02 (REVIEW), chưa phải gate bảo mật.
 
 ## Schema dữ liệu REC-01
 
@@ -48,13 +49,38 @@ matrix sâu và process containment thuộc REC-02/PROC.
 
 1. Repo nguồn: OMP không tự sửa, stage, reset hoặc commit nội dung người dùng.
 2. Mỗi project/run chỉ một owner; không spawn Worker mới khi owner cũ chưa được
-   chứng minh đã dừng. Khóa file không thay thế containment process tree.
+   chứng minh đã dừng. Khóa file không thay thế containment process tree. Trên
+   Windows, Job Object kill-on-close là lớp containment chính; lỗi setup job
+   phải fail-closed, không chạy Worker không được quản lý.
 3. Không complete khi test fail, không tìm thấy test, scope sai hoặc checkpoint
    chưa đối soát. Test result phải thuộc đúng tree và command được phê chuẩn.
 4. Không tin task/provider để chọn đường dẫn checkpoint, sửa baseline hoặc
    thay lệnh test. Sai schema phải từ chối trước side effect.
 5. Side effect không tự replay nếu chưa có quy tắc idempotency/đối soát.
 6. Không nâng cấp cam kết từ "phát hiện sau chạy" thành "ngăn trước chạy".
+
+## Process containment trên Windows (PROC-02 REVIEW)
+
+- Mỗi Worker/test command có một Job Object riêng, không kế thừa handle, bật
+  `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`. Process được tạo suspended với
+  `PROC_THREAD_ATTRIBUTE_JOB_LIST`; containment có hiệu lực trước
+  `ResumeThread`, không có bước create-rồi-attach.
+- `child_pid` phải được save thành công trước resume. Save/resume/job-membership
+  lỗi thì terminate job và fail-closed; không fallback sang Popen không
+  containment.
+- Root exit khi job còn process là operation error, không phải complete.
+  Timeout/Ctrl+C/cleanup dùng `TerminateJobObject` và chờ job rỗng có giới hạn
+  10 giây. Chỉ khi job rỗng mới xóa `child_pid`; hết hạn thì giữ PID, trả
+  cleanup error và không spawn thay thế.
+- Owner bị kill cứng: Windows đóng job handle cuối cùng và kill process còn
+  trong job, kể cả process suspended. Đây là containment vòng đời, không phải
+  sandbox: không hạn chế quyền file/network/credential và không đổi user.
+- Job không bật breakaway. Yêu cầu `PROC_THREAD_ATTRIBUTE_JOB_LIST` cần
+  Windows 10 / Windows Server 2016 trở lên (nested jobs có từ Windows 8 nhưng
+  không thay thế yêu cầu job-list); môi trường không hỗ trợ bị từ chối, không
+  silently fallback.
+- POSIX giữ process group + SIGKILL baseline. `child_pid` vẫn là guard sau crash
+  cứng; PROC-02 không thêm recovery command tự động (thuộc PROC-03).
 
 ## Ranh giới module mục tiêu
 
@@ -89,7 +115,9 @@ Không import CLI từ lớp thấp; không để provider tự ghi state hoặc
   staging dở bằng git reset, commit idempotent không duplicate, fail-closed an toàn
   khi clone/checkout dở; ghi nhận giới hạn spawn-gap và bằng chứng Windows.
 - `process`: owner identity, PID + dấu nhận diện đời tiến trình/OS containment;
-  PID đơn lẻ không đủ chứng minh ownership (PROC-01/PROC-02).
+  PID đơn lẻ không đủ chứng minh ownership. Trên Windows, job handle
+  kill-on-close + kiểm tra job rỗng là bằng chứng containment; owner hard-kill
+  làm OS kill cây (PROC-01/PROC-02).
 - `process lock`: `run`/`resume`/`init` giữ OS lock độc quyền non-blocking;
   lock tự nhả khi process chết, không unlink lock file để phá stale; `status`
   chỉ đọc và không lấy lock. OS lock chỉ serialize orchestrator, không thay
