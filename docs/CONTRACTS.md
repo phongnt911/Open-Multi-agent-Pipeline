@@ -103,6 +103,25 @@ checkpoint schema.
   cứng; PROC-03 `recover` chỉ phân loại PID read-only và cần explicit operator
   attestation, không tự kill hay chứng minh ownership.
 
+## Cách ly quyền OS trên Windows (SEC-01 REVIEW)
+
+- SEC-01 chọn AppContainer/lowbox làm candidate boundary; ADR-0006 và
+  `docs/security/THREAT-MODEL.md` là nguồn chi tiết. Đây chưa phải cam kết
+  production và chưa tích hợp `omp_core`.
+- Trên fixture tạm, process AppContainer thật có cùng user SID, low integrity,
+  0 capability; OS từ chối đọc/ghi sáu canary source/runtime/vault/config/
+  audit/credentials và hash không đổi, trong khi process cùng user không
+  AppContainer truy cập được. Đây là negative proof trên fixture, không phải
+  bằng chứng tài sản thật đã được bảo vệ.
+- Chưa được claim network-isolated, credential-isolated hoặc handle-isolated.
+  Network mới thử loopback; credential là canary giả; inherited handle chưa
+  kiểm; Worker CLI/Python/provider thật chưa chạy dưới boundary.
+- Việc cài ACL, cấp capability tối thiểu, giới hạn handle, cleanup profile và
+  recovery khi owner chết thuộc SEC-02/SEC-03; lỗi setup phải fail-closed,
+  không fallback sang cùng-user unrestricted. Job Object vẫn chỉ là lifecycle.
+- Không dùng AppContainer trong production cho đến khi runner tích hợp, có
+  negative proof cho tài sản/network thật và review độc lập security gate.
+
 ## Ranh giới module mục tiêu
 
 | Trách nhiệm | Đầu vào/đầu ra | Quyền side effect |
