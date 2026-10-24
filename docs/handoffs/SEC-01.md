@@ -3,7 +3,10 @@
 - Trạng thái: REVIEW
 - Owner / revision hoặc diff: AI thực thi SEC-01 (opencode, DeepSeek V4.1
   Flash Free); base `6cae125c947ddeb90c611d921e23786e753d8a73`; nhánh
-  `codex/sec-01-windows-isolation-proof`; chưa commit/push/merge.
+  `codex/sec-01-windows-isolation-proof`. Revision accepted r3 đã được tích
+  hợp thành commit `4bb98560246d81bbe0cd8804a07a5bec78fdbbd8` (PR draft #4).
+  Lượt này chỉ sửa finding CI SEC01-CI-R1 trên working tree, **chưa
+  commit/push/merge**.
 - File thay đổi:
   - `docs/security/THREAT-MODEL.md` (mới)
   - `docs/decisions/0006-windows-isolation.md` (mới)
@@ -108,7 +111,50 @@
     chối riêng.
   - Giữ nguyên proof OS denial thật, same-user control và mọi giới hạn
     NOT PROVEN; không đổi `omp_core`, baseline tests, review history.
+- Finding CI đã sửa (SEC01-CI-R1, P2):
+  - Nguyên nhân: `test_cleanup_timeout_is_bounded` nằm trong
+    `OwnedProcessCleanupTests`; `setUp` của class này đọc
+    `proof.kernel32.CreateProcessW` trong khi `kernel32` là `None` trên
+    non-Windows, nên full suite Linux lỗi `AttributeError` tại dòng 482 dù
+    assertion chỉ kiểm constant portable.
+  - Sửa: tách test sang class `CleanupTimeoutPolicyTests` không có Win32
+    setup; giữ nguyên thân test
+    `assertLessEqual(proof.OWNED_PROCESS_CLEANUP_TIMEOUT_MS, 5000)`. Diff
+    4 dòng thêm, 0 dòng xóa; không thêm skip, không nới bound, không sửa
+    native regressions R1/R1a/R2, proof/verifier, production, baseline
+    tests, workflow hay checker.
+  - Fail-before (Linux 3.12.15, git worktree tại base `4bb9856`):
+    `python -m unittest tests.test_security_proof -v` → 73 tests, errors=1,
+    skipped=6; `AttributeError: 'NoneType' object has no attribute
+    'CreateProcessW'` tại `tests/test_security_proof.py:482`, exit 1
+    (`.omp/sec01-ci-r1-fail-before-docker312.log`).
+  - Pass-after:
+    - Windows 3.12.7: portable 1/1 OK; `OwnedProcessCleanupTests` 5/5 OK
+      (test timeout đã chuyển sang class portable); focused 73/73 OK;
+      `python tools/check.py` 233 OK, 119.855 s, exit 0.
+    - Linux 3.12.15 (container, `--init`): focused 73 OK (skipped=6); full
+      `python tools/check.py` 233 OK (skipped=22), 216.205 s, exit 0.
+    - Linux 3.10.22 (container, `--init`): focused 73 OK (skipped=6); full
+      233 OK (skipped=22), 195.031 s, exit 0.
+  - Evidence tổng hợp: `.omp/sec01-ci-r1.json`; log chi tiết
+    `.omp/sec01-ci-r1-*.log`.
+  - Hash test file: accepted r3
+    `23592126b6b199a98cae0a142dc232d333ba8753d182b6abaf88ed9fc6332aa9` →
+    sau sửa
+    `78ad73ae30fbc0c47b122067afdb74d55a6d98b7329dc9e1c1693910b1a2d7ac`.
+    Đây là thay đổi duy nhất ngoài revision accepted và chỉ tác động
+    portability của test class.
+  - Hai lần chạy **không** dùng làm evidence: WSL Python 3.14.4 full có 1
+    failure ở `test_validation` do khác thông điệp parser của Python 3.14;
+    Docker 3.12 không có `--init` có 1 failure ở `test_process_lock` do
+    container không reap process. Cùng test process-lock đạt trong WSL và
+    trong Docker có `--init`; cả hai lỗi không liên quan SEC-01 và không
+    thuộc CI matrix.
 - Kiểm thử chưa chạy và nguyên nhân:
+  - Chưa chạy CI remote trên exact commit chứa bản sửa CI-R1: patch còn ở
+    working tree, chưa được phép commit/push; không có SHA để chạy CI.
+  - Chưa chạy full suite Windows/Python 3.10 local (chỉ có Windows 3.12.7);
+    CI Windows 3.10 phải chạy sau khi publish.
   - Không chạy Worker OMP/Python/provider thật dưới AppContainer: runtime
     Python trong profile user chưa được grant; đây là prerequisite SEC-02,
     ghi NOT PROVEN.
@@ -136,22 +182,30 @@
   - `docs/reviews/SEC-01-r3.md` kết luận **ACCEPTED** cho threat model và
     standalone fixture proof; 13/13 hash trong handoff khớp tại thời điểm
     review. Revision accepted là working tree chưa commit trên base
-    `6cae125c947ddeb90c611d921e23786e753d8a73`; không sửa code/tests sau
-    acceptance.
+    `6cae125c947ddeb90c611d921e23786e753d8a73`.
+  - Revision accepted đã được tích hợp thành commit
+    `4bb98560246d81bbe0cd8804a07a5bec78fdbbd8` (PR draft #4, không merge).
+    CI remote trên commit này: Windows 3.10.11 và 3.12.10 đạt 233 tests;
+    Ubuntu 3.10.22 và 3.12.15 lỗi `errors=1, skipped=22` đúng finding
+    SEC01-CI-R1 (`docs/reviews/SEC-01-CI.md`).
+  - Bản sửa CI-R1 hiện chỉ nằm trên working tree: thay 1 test class trong
+    `tests/test_security_proof.py`, hash mới
+    `78ad73ae30fbc0c47b122067afdb74d55a6d98b7329dc9e1c1693910b1a2d7ac`.
+    Không commit/push/merge trong lượt này.
   - Manifest tích hợp: `docs/handoffs/SEC-01-INTEGRATION.md`, kèm snapshot
-    `.omp/sec01-integration-preserve.json`. Manifest tách 9 file tích hợp,
-    13 file evidence-only (review/proof logs) và 44 file docs/workspace/
-    history có sẵn ngoài scope; README/CONTRACTS/SDD chỉ nhận đúng hunk
-    SEC-01.
-  - Chưa có exact commit SHA và **chưa có CI remote** trên revision accepted.
-    Không commit/push/merge trong lượt này; CI phải chạy sau khi được phép
-    tạo commit và phải ghi head SHA thật.
+    `.omp/sec01-integration-preserve.json` (trạng thái trước bản sửa CI-R1).
+    Manifest tách 9 file tích hợp, 14 file evidence-only (review/proof logs)
+    và 44 file docs/workspace/history có sẵn ngoài scope; README/CONTRACTS/
+    SDD chỉ nhận đúng hunk SEC-01.
+  - Chưa có CI remote trên exact commit chứa bản sửa CI-R1. Không dùng
+    evidence Linux local thay CI remote; phải chạy lại matrix sau publish.
 - Bước tiếp theo / owner đề xuất:
-  1. Điều phối review manifest tích hợp, xác nhận 9 file và hunk SEC-01,
-     không nhận 44 file ngoài scope.
-  2. Khi có quyền publish: tạo commit từ manifest, push nhánh/PR, chạy CI
-     Windows/Linux trên exact commit SHA và đối chiếu lại hash; không dùng
-     local Windows thay CI Linux.
+  1. Reviewer review diff CI-R1 (4 dòng thêm, không đổi assertion/skip) và
+     evidence Windows + Linux trong `.omp/sec01-ci-r1.json`.
+  2. Khi có quyền publish: commit riêng bản sửa CI-R1 (chỉ
+     `tests/test_security_proof.py` + handoff/evidence liên quan), push lên
+     PR #4, chạy CI Windows/Linux 3.10/3.12 trên exact SHA mới và ghi kết
+     quả từng job.
   3. Reviewer độc lập security gate đọc threat model/ADR/proof, chạy lại
      proof + verifier + `python tools/check.py` trên bản bàn giao.
   4. Chấp nhận candidate hoặc yêu cầu sửa finding; không DONE/đóng G3.
@@ -209,7 +263,8 @@ G3 và không ghi DONE thay điều phối.
 
 ```text
 2fa94734612eb1830142ccbd724915bd08f8d351e9eb6bb8547d3325f3504adf  tools/proofs/sec01_windows.py
-23592126b6b199a98cae0a142dc232d333ba8753d182b6abaf88ed9fc6332aa9  tests/test_security_proof.py
+23592126b6b199a98cae0a142dc232d333ba8753d182b6abaf88ed9fc6332aa9  tests/test_security_proof.py (accepted r3, trước CI-R1)
+78ad73ae30fbc0c47b122067afdb74d55a6d98b7329dc9e1c1693910b1a2d7ac  tests/test_security_proof.py (hiện tại, sau CI-R1)
 f73b94f7ee2a38d3a55767d6a18380f5bfd5d7fddcd9979311934afa201953db  docs/security/THREAT-MODEL.md
 418d5a6189d29837745e66d22d638b60c92130392e06fc06d0b45a4ca493151c  docs/decisions/0006-windows-isolation.md
 9350ee0c0110beca8c822a002ed536809b8c71348c212ed72b80edde85f82e93  docs/tasks/SEC-01.md
@@ -221,6 +276,51 @@ fdd738154183c1a761b3daa5cad7f3acc357ae64febb4b6f42d79456a068116d  omp_core/windo
 dcc2e4fb800eff39bb1b61f82f7f0d8ccca36e30621e955c760dc6157151fd83  tools/check.py (không đổi)
 37bac15ce7f15a5da05dd3d505161546355b70df06f55634cdc502e6bffc8c31  .omp/sec01-evidence-final.json
 eafb6e113c841ed87356f9218ba97aaa23c933220e67bad46ec6d545d55492cc  .omp/check-final.log
+```
+
+`tests/test_security_proof.py` có hai hash: bản accepted r3 và bản hiện tại sau
+khi tách class portable cho CI-R1. Mọi file accepted khác không đổi. Snapshot
+trước sửa nằm trong `.omp/sec01-integration-preserve.json`; evidence CI-R1
+nằm trong `.omp/sec01-ci-r1.json`.
+
+## Prompt reviewer cho bản sửa CI-R1 (chat)
+
+```text
+Bạn là reviewer độc lập cho bản sửa duy nhất SEC01-CI-R1 của OMP. Base commit
+`4bb98560246d81bbe0cd8804a07a5bec78fdbbd8`, nhánh
+`codex/sec-01-windows-isolation-proof`, trạng thái REVIEW (chưa DONE, G3 mở).
+Bản sửa đang ở working tree, chưa commit/push; chưa có CI remote trên patch.
+
+Đọc trước: docs/reviews/SEC-01-CI.md (finding gốc), docs/handoffs/SEC-01.md,
+docs/handoffs/SEC-01-INTEGRATION.md, .omp/sec01-ci-r1.json, AGENTS.md.
+
+Việc cần làm:
+1. Kiểm diff `tests/test_security_proof.py`: chỉ tách
+   `test_cleanup_timeout_is_bounded` sang class `CleanupTimeoutPolicyTests`
+   không có Win32 setup; assertion `OWNED_PROCESS_CLEANUP_TIMEOUT_MS <= 5000`
+   giữ nguyên; không thêm skip, không nới bound/expected, không sửa native
+   R1/R1a/R2, production, baseline tests, workflow, checker.
+2. Xác nhận hash hiện tại
+   `78ad73ae30fbc0c47b122067afdb74d55a6d98b7329dc9e1c1693910b1a2d7ac`
+   và các file accepted khác không đổi so với r3.
+3. Chạy lại trên Windows:
+   python -m unittest tests.test_security_proof.CleanupTimeoutPolicyTests -v
+   python -m unittest tests.test_security_proof.OwnedProcessCleanupTests -v
+   python -m unittest tests.test_security_proof -v
+   python tools/check.py
+4. Chạy lại trên Linux nếu có (khuyến nghị đúng matrix 3.10/3.12):
+   python -m unittest tests.test_security_proof -v
+   python tools/check.py
+   Kỳ vọng: portable assertion thực sự chạy, native tests skip hợp lệ,
+   không còn AttributeError ở setUp; full không lỗi do SEC-01.
+5. Đối chiếu fail-before trong `.omp/sec01-ci-r1-fail-before-docker312.log`
+   (AttributeError tại dòng 482 trên base) và pass-after trong log tương ứng.
+6. Xác nhận chưa có CI remote trên exact commit chứa patch; không chấp nhận
+   local Windows/Linux thay CI matrix. Không commit/push/merge/DONE/đóng G3/
+   mở SEC-02.
+
+Kết luận ACCEPTED / CHANGES_REQUIRED / BLOCKED; mỗi finding có ID, P0–P3,
+file:dòng, trigger, hậu quả, đề nghị và cách xác minh.
 ```
 
 Không ghi DONE chỉ vì hết thời gian hoặc tests một phần đạt.

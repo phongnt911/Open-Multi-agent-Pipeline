@@ -673,6 +673,10 @@ class OwnedProcessCleanupTests(unittest.TestCase):
                     self._create(job=1)
         self._assert_cleanup()
 
+
+class CleanupTimeoutPolicyTests(unittest.TestCase):
+    """Keep the cleanup-timeout bound portable: no Win32 fixture setup."""
+
     def test_cleanup_timeout_is_bounded(self) -> None:
         self.assertLessEqual(proof.OWNED_PROCESS_CLEANUP_TIMEOUT_MS, 5000)
 
