@@ -1,6 +1,8 @@
 """Single-task MVP. The checkout isolates Git changes, not OS permissions."""
 import argparse
 from contextlib import contextmanager
+from datetime import datetime, timezone
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -8,7 +10,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from typing import BinaryIO, Iterator, TypeAlias, TypedDict, cast
+from typing import BinaryIO, Iterator, NamedTuple, TypeAlias, TypedDict, cast
 import uuid
 
 from .windows_job import (
@@ -68,6 +70,15 @@ RUN_ID_PATTERN = re.compile(r"[A-Za-z0-9][A-Za-z0-9_-]{0,63}\Z")
 COMMIT_OID_PATTERN = re.compile(
     r"(?:[0-9a-fA-F]{40}|[0-9a-fA-F]{64})\Z"
 )
+STATE_DIGEST_PATTERN = re.compile(r"[0-9a-fA-F]{64}\Z")
+AUDIT_SCHEMA_VERSION = 1
+ABORT_MARKER_SCHEMA_VERSION = 1
+ABORT_MARKER_FILENAME = "aborted.json"
+ABORTED_STATE_FILENAME = "aborted-state.json"
+ABORT_MARKER_FIELDS = frozenset({
+    "schema_version", "action", "run_id", "state_sha256", "child_pid",
+    "created_utc",
+})
 
 
 class Config(TypedDict):
@@ -127,6 +138,14 @@ class State(TypedDict, total=False):
     verification_evidence: VerificationEvidence
     commit_intent: CommitIntent
     completion_kind: str
+
+
+class StateSnapshot(NamedTuple):
+    """Exact checkpoint bytes, their digest, and the validated state."""
+
+    raw: bytes
+    digest: str
+    state: State
 
 
 class OmpError(ValueError):
@@ -739,6 +758,468 @@ def validate_state(
     return normalized
 
 
+def _parse_json_bytes(
+    raw: bytes, path: Path, error: type[OmpError]
+) -> JsonValue:
+    """Parse UTF-8 JSON bytes without rewriting or exposing payload contents."""
+    try:
+        text = raw.decode("utf-8")
+    except UnicodeError as exc:
+        raise error(f"Cannot decode UTF-8 JSON from {path}: {exc}") from exc
+    try:
+        return json.loads(text)
+    except json.JSONDecodeError as exc:
+        raise error(f"Invalid JSON in {path}: {exc}") from exc
+    except ValueError as exc:
+        raise error(f"JSON value is not supported in {path}") from exc
+    except RecursionError as exc:
+        raise error(f"JSON nesting is too deep in {path}") from exc
+
+
+def _sanitize_exception(exc: BaseException | None) -> Exception | None:
+    """Return a clean clone of an exception without secrets, filenames, or raw text.
+
+    Preserves KeyboardInterrupt/SystemExit semantics by re-raising immediately.
+    For OSError (and subclasses), returns an instance of the exact class with
+    a generic message and cleared cause/context/filename.
+    For OmpError, returns an instance of the same class with sanitized cause.
+    """
+    if exc is None:
+        return None
+    if isinstance(exc, (KeyboardInterrupt, SystemExit)):
+        raise exc
+    if isinstance(exc, OSError):
+        error_cls = type(exc)
+        clone = error_cls(error_cls.__name__)
+        clone.__cause__ = None
+        clone.__context__ = None
+        clone.__suppress_context__ = True
+        return clone
+    if isinstance(exc, OmpError):
+        error_cls = type(exc)
+        sanitized_cause = _sanitize_exception(exc.__cause__)
+        clone = error_cls(error_cls.__name__)
+        clone.__cause__ = sanitized_cause
+        clone.__context__ = None
+        clone.__suppress_context__ = True
+        return clone
+    error_cls = type(exc)
+    clone = OperationError(error_cls.__name__)
+    clone.__cause__ = None
+    clone.__context__ = None
+    clone.__suppress_context__ = True
+    return clone
+
+
+def _read_state_snapshot(
+    checkpoint: Path,
+    *,
+    expected_digest: str | None = None,
+    expected_run_id: str | None = None,
+    oid_length: int | None = None,
+    error: type[OmpError] = OperationError,
+) -> StateSnapshot:
+    """Read, hash, and validate exact checkpoint bytes.
+
+    The digest is SHA-256 of the raw file bytes, not of a normalized JSON
+    representation. A mismatch fails closed without writing the checkpoint.
+
+    Raises:
+        OmpError: *error* when the file cannot be read, is invalid, or does not
+            match the requested run ID/digest.
+    """
+    try:
+        raw = checkpoint.read_bytes()
+    except OSError as exc:
+        sanitized = _sanitize_exception(exc)
+        raise error(
+            f"Cannot read checkpoint: {type(exc).__name__}"
+        ) from sanitized
+    digest = hashlib.sha256(raw).hexdigest()
+    value = _parse_json_bytes(raw, checkpoint, error)
+    state = validate_state(value, oid_length=oid_length, error=error)
+    if expected_run_id is not None and state["run_id"] != expected_run_id:
+        raise error("state run_id does not match requested run ID")
+    if expected_digest is not None and digest != expected_digest.lower():
+        raise error("state digest does not match --state-sha256")
+    return StateSnapshot(raw=raw, digest=digest, state=state)
+
+
+def _read_state_digest(
+    checkpoint: Path, *, error: type[OmpError] = OperationError
+) -> str:
+    """Return the SHA-256 digest of exact checkpoint bytes."""
+    try:
+        raw = checkpoint.read_bytes()
+    except OSError as exc:
+        sanitized = _sanitize_exception(exc)
+        raise error(
+            f"Cannot read checkpoint: {type(exc).__name__}"
+        ) from sanitized
+    return hashlib.sha256(raw).hexdigest()
+
+
+def _abort_marker_path(root: Path, run_id: str) -> Path:
+    """Return the sidecar path that marks *run_id* as aborted."""
+    return root / ".omp" / "runs" / run_id / ABORT_MARKER_FILENAME
+
+
+def _aborted_state_path(root: Path, run_id: str) -> Path:
+    """Return the archived checkpoint path for an aborted run."""
+    return root / ".omp" / "runs" / run_id / ABORTED_STATE_FILENAME
+
+
+def _read_abort_marker(
+    root: Path, run_id: str, *, error: type[OmpError] = OperationError
+) -> JsonObject | None:
+    """Read and strictly validate an abort marker, if present.
+
+    Raises:
+        OmpError: *error* when the marker exists but is unreadable, has unknown
+            fields, or does not bind the requested run/digest.
+    """
+    path = _abort_marker_path(root, run_id)
+    try:
+        path.stat()
+    except FileNotFoundError:
+        return None
+    except OSError as exc:
+        sanitized = _sanitize_exception(exc)
+        raise error(
+            f"Cannot stat abort marker: {type(exc).__name__}"
+        ) from sanitized
+    marker = read_object(path, error)
+    _check_fields(marker, ABORT_MARKER_FIELDS, "abort marker", error)
+    _schema_version(
+        marker,
+        "abort marker",
+        allow_legacy=False,
+        error=error,
+        expected_version=ABORT_MARKER_SCHEMA_VERSION,
+    )
+    for field in ("action", "run_id", "state_sha256", "child_pid", "created_utc"):
+        if field not in marker:
+            raise error(f"abort marker is missing field: {field}")
+    if marker["action"] != "abort":
+        raise error("abort marker action must be abort")
+    if marker["run_id"] != run_id:
+        raise error("abort marker run_id does not match requested run ID")
+    digest = marker["state_sha256"]
+    if not isinstance(digest, str) or not STATE_DIGEST_PATTERN.fullmatch(digest):
+        raise error("abort marker state_sha256 must be a 64-character SHA-256")
+    child_pid = marker["child_pid"]
+    if child_pid is not None and (
+        not _is_int(child_pid) or child_pid <= 0
+    ):
+        raise error("abort marker child_pid must be null or a positive integer")
+    created = marker["created_utc"]
+    if not isinstance(created, str) or not created.strip():
+        raise error("abort marker created_utc must be a nonempty string")
+    return marker
+
+
+def _check_not_aborted(root: Path, state: State) -> None:
+    """Reject a run when a matching abort marker exists.
+
+    Raises:
+        OperationError: the marker is invalid/mismatched or the run was
+            intentionally abandoned. The checkpoint and clone are retained.
+    """
+    marker = _read_abort_marker(root, state["run_id"])
+    if marker is None:
+        return
+    digest = _read_state_digest(root / ".omp/state.json")
+    if marker["state_sha256"].lower() != digest:
+        raise OperationError(
+            "Abort marker does not match checkpoint bytes; retain run for inspection"
+        )
+    raise OperationError(
+        "Run was aborted; state, clone and logs were retained; start a new run"
+    )
+
+
+def _write_bytes_atomic(path: Path, data: bytes) -> None:
+    """Replace *path* with *data* only after the complete bytes reach disk."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fd, name = tempfile.mkstemp(dir=path.parent, suffix=".tmp")
+    try:
+        with os.fdopen(fd, "wb") as stream:
+            stream.write(data)
+            stream.flush()
+            os.fsync(stream.fileno())
+        os.replace(name, path)
+    finally:
+        if os.path.exists(name):
+            try:
+                os.unlink(name)
+            except OSError:
+                pass
+
+
+def _utc_timestamp() -> str:
+    """Return a sortable UTC timestamp for an audit event."""
+    return datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S.%fZ")
+
+
+def _audit_event_path(root: Path, run_id: str) -> Path:
+    """Return a unique, atomic audit event path for *run_id*."""
+    filename = f"{_utc_timestamp()}-{uuid.uuid4().hex}.json"
+    return root / ".omp" / "audit" / run_id / filename
+
+
+def _write_audit_event(
+    root: Path,
+    *,
+    action: str,
+    result: str,
+    reason_code: str,
+    state: State,
+    before_digest: str,
+    after_digest: str,
+    checkpoint_changed: bool,
+    child_pid_after: int | None,
+    operator_confirmed_child_stopped: bool = False,
+    containment_proof: str = "none",
+    abort_marker: str | None = None,
+) -> Path:
+    """Persist one sanitized audit event atomically.
+
+    The event intentionally excludes config, task, argv, prompt, logs, and
+    raw exception text. ``reason_code`` is an OMP-owned enum-like value.
+
+    Raises:
+        OperationError: the audit file could not be written. Callers must not
+            report success in that case.
+    """
+    path = _audit_event_path(root, state["run_id"])
+    event: JsonObject = {
+        "schema_version": AUDIT_SCHEMA_VERSION,
+        "timestamp_utc": _utc_timestamp(),
+        "action": action,
+        "result": result,
+        "reason_code": reason_code,
+        "run_id": state["run_id"],
+        "state_path": ".omp/state.json",
+        "before_sha256": before_digest,
+        "after_sha256": after_digest,
+        "phase_before": state["phase"],
+        "phase_after": state["phase"],
+        "state_schema_version": state["schema_version"],
+        "child_pid_before": state.get("child_pid"),
+        "child_pid_after": child_pid_after,
+        "checkpoint_changed": checkpoint_changed,
+        "operator_confirmed_child_stopped": operator_confirmed_child_stopped,
+        "containment_proof": containment_proof,
+        "abort_marker": abort_marker,
+    }
+    failed_save: OperationError | None = None
+    try:
+        save(path, event)
+    except OSError as exc:
+        sanitized = _sanitize_exception(exc)
+        err = OperationError(
+            f"Cannot persist {action} audit event: {type(exc).__name__}"
+        )
+        err.__cause__ = sanitized
+        err.__suppress_context__ = True
+        failed_save = err
+    if failed_save is not None:
+        failed_save.__context__ = None
+        raise failed_save
+    return path
+
+
+def _audit_refusal(
+    root: Path,
+    *,
+    action: str,
+    reason_code: str,
+    snapshot: StateSnapshot,
+    message: str,
+    operator_confirmed_child_stopped: bool = False,
+    containment_proof: str = "none",
+    abort_marker: str | None = None,
+) -> None:
+    """Audit a refusal, then raise the refusal without mutating state.
+
+    If audit persistence fails, the audit error becomes primary and the
+    refusal remains in its cause chain.
+    """
+    failed_audit: OperationError | None = None
+    try:
+        _write_audit_event(
+            root,
+            action=action,
+            result="refused",
+            reason_code=reason_code,
+            state=snapshot.state,
+            before_digest=snapshot.digest,
+            after_digest=snapshot.digest,
+            checkpoint_changed=False,
+            child_pid_after=snapshot.state.get("child_pid"),
+            operator_confirmed_child_stopped=operator_confirmed_child_stopped,
+            containment_proof=containment_proof,
+            abort_marker=abort_marker,
+        )
+    except OperationError as audit_exc:
+        failed_audit = audit_exc
+
+    if failed_audit is not None:
+        sanitized_audit_io = _sanitize_exception(failed_audit.__cause__)
+        refusal = OperationError(message)
+        refusal.__cause__ = sanitized_audit_io
+        refusal.__context__ = None
+        refusal.__suppress_context__ = True
+
+        sanitized_audit_exc = OperationError(str(failed_audit))
+        sanitized_audit_exc.__cause__ = refusal
+        sanitized_audit_exc.__context__ = None
+        sanitized_audit_exc.__suppress_context__ = True
+        raise sanitized_audit_exc
+
+    raise OperationError(message)
+
+
+def _audit_error_or_raise(
+    root: Path,
+    *,
+    action: str,
+    reason_code: str,
+    snapshot: StateSnapshot,
+    original: BaseException,
+    message: str,
+    child_pid_after: int | None,
+    checkpoint_changed: bool = False,
+    abort_marker: str | None = None,
+    after_digest: str | None = None,
+) -> None:
+    """Audit an operational failure, then raise without claiming success.
+
+    If audit persistence also fails, the audit error becomes primary and keeps
+    *original* in its cause chain.
+    """
+    if isinstance(original, (KeyboardInterrupt, SystemExit)):
+        raise original
+    sanitized_original = _sanitize_exception(original)
+    actual_after_digest = after_digest
+    if actual_after_digest is None:
+        if checkpoint_changed:
+            actual_after_digest = "unknown"
+        else:
+            actual_after_digest = snapshot.digest
+    failed_audit: OperationError | None = None
+    try:
+        _write_audit_event(
+            root,
+            action=action,
+            result="error",
+            reason_code=reason_code,
+            state=snapshot.state,
+            before_digest=snapshot.digest,
+            after_digest=actual_after_digest,
+            checkpoint_changed=checkpoint_changed,
+            child_pid_after=child_pid_after,
+            abort_marker=abort_marker,
+        )
+    except OperationError as audit_exc:
+        failed_audit = audit_exc
+
+    if failed_audit is not None:
+        sanitized_audit_io = _sanitize_exception(failed_audit.__cause__)
+        if (
+            sanitized_audit_io is not None
+            and sanitized_original is not None
+            and sanitized_original.__cause__ is None
+        ):
+            sanitized_original.__cause__ = sanitized_audit_io
+            sanitized_original.__context__ = None
+            sanitized_original.__suppress_context__ = True
+        sanitized_audit_exc = OperationError(str(failed_audit))
+        sanitized_audit_exc.__cause__ = sanitized_original
+        sanitized_audit_exc.__context__ = None
+        sanitized_audit_exc.__suppress_context__ = True
+        raise sanitized_audit_exc
+
+    op_error = OperationError(message)
+    op_error.__cause__ = sanitized_original
+    op_error.__context__ = None
+    op_error.__suppress_context__ = True
+    raise op_error
+
+
+def _pid_state(pid: int) -> str:
+    """Classify a PID as ``alive``, ``absent``, or ``unknown``.
+
+    This is deliberately read-only. On Windows it opens the process with
+    ``PROCESS_QUERY_LIMITED_INFORMATION`` only; it never requests terminate
+    rights and never signals/kills the PID. A PID is not an ownership proof.
+    """
+    if os.name == "nt":
+        import ctypes
+        from ctypes import wintypes
+
+        process_query_limited_information = 0x1000
+        still_active = 259
+        error_invalid_parameter = 87
+        error_not_found = 1168
+        kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+        kernel32.OpenProcess.argtypes = [
+            wintypes.DWORD, wintypes.BOOL, wintypes.DWORD,
+        ]
+        kernel32.OpenProcess.restype = wintypes.HANDLE
+        kernel32.GetExitCodeProcess.argtypes = [
+            wintypes.HANDLE, ctypes.POINTER(wintypes.DWORD),
+        ]
+        kernel32.GetExitCodeProcess.restype = wintypes.BOOL
+        kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+        kernel32.CloseHandle.restype = wintypes.BOOL
+        handle = kernel32.OpenProcess(
+            process_query_limited_information, False, pid
+        )
+        if not handle:
+            error = ctypes.get_last_error()
+            if error in (error_invalid_parameter, error_not_found):
+                return "absent"
+            return "unknown"
+        try:
+            code = wintypes.DWORD()
+            if not kernel32.GetExitCodeProcess(handle, ctypes.byref(code)):
+                return "unknown"
+            return "alive" if code.value == still_active else "absent"
+        finally:
+            kernel32.CloseHandle(handle)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return "absent"
+    except PermissionError:
+        return "unknown"
+    except OSError:
+        return "unknown"
+    return "alive"
+
+
+def _check_recover_checkout(root: Path, state: State) -> None:
+    """Validate that recover has a plausible checkout for the current phase.
+
+    Raises:
+        OperationError: an interrupted clone or missing checkout means recover
+            must not pretend the run is ready.
+    """
+    checkout = root / ".omp" / "runs" / state["run_id"] / "checkout"
+    if state["phase"] == "preparing":
+        if checkout.exists():
+            raise OperationError(
+                "Interrupted clone: recover will not overwrite it; retain it "
+                "for inspection or abort the run"
+            )
+        return
+    if not checkout.is_dir():
+        raise OperationError(
+            "Checkout directory is missing; recover cannot restore evidence"
+        )
+
+
 def _timeout_error(
     label: str, exc: subprocess.TimeoutExpired
 ) -> subprocess.TimeoutExpired:
@@ -1346,6 +1827,51 @@ def check_provenance(state: State, checkout: Path, base_tree: str) -> None:
         )
 
 
+def _check_complete_run(root: Path, state: State) -> Path:
+    """Validate a complete run read-only and return its checkout path.
+
+    Raises:
+        OperationError: checkout/commit tree/provenance no longer matches the
+            complete checkpoint. No Worker or test command runs.
+    """
+    checkout = root / ".omp/runs" / state["run_id"] / "checkout"
+    if not checkout.exists():
+        raise OperationError("Checkout directory is missing for complete run")
+    if git(checkout, "status", "--porcelain"):
+        raise OperationError("Checkout is dirty in complete run; inspect before resuming")
+    base_tree = git(checkout, "rev-parse", f"{state['base_commit']}^{{tree}}")
+    check_provenance(state, checkout, base_tree)
+    head = git(checkout, "rev-parse", "HEAD")
+    if head != state["result_commit"]:
+        raise OperationError("Checkout HEAD does not match result_commit")
+    head_tree = git(checkout, "rev-parse", "HEAD^{tree}")
+    evidence = state["verification_evidence"]
+    intent = state["commit_intent"]
+    if state.get("completion_kind") == "no_change":
+        if state["result_commit"] != state["base_commit"]:
+            raise OperationError("no_change run requires result_commit to match base_commit")
+        if head != state["base_commit"]:
+            raise OperationError("no_change run requires checkout HEAD to match base_commit")
+        if evidence["candidate_tree"] != base_tree:
+            raise OperationError("candidate_tree does not match base_tree in no_change run")
+        if head_tree != base_tree:
+            raise OperationError("checkout HEAD tree does not match base_tree in no_change run")
+    elif state.get("completion_kind") == "committed":
+        if head_tree != evidence["candidate_tree"]:
+            raise OperationError(
+                "Checkout HEAD tree does not match verification evidence candidate_tree"
+            )
+        parent = git(checkout, "rev-parse", "HEAD^")
+        if parent != state["base_commit"]:
+            raise OperationError("Checkout HEAD parent does not match base_commit")
+        commit_subject = git(checkout, "log", "-1", "--format=%s")
+        if commit_subject != intent["commit_marker"]:
+            raise OperationError("Checkout commit marker does not match commit intent")
+    else:
+        raise OperationError("Unsupported completion_kind")
+    return checkout
+
+
 def advance(root: Path) -> None:
     """Advance the checkpoint for *root* by one or more phases.
 
@@ -1366,6 +1892,7 @@ def advance(root: Path) -> None:
     state = validate_state(
         state, oid_length=git_object_id_length(root)
     )
+    _check_not_aborted(root, state)
     if state["schema_version"] == 1:
         raise OperationError(
             "Cannot resume run with schema_version 1; retain run/checkout and start a new run"
@@ -1383,36 +1910,7 @@ def advance(root: Path) -> None:
             raise OperationError("Checkout directory is missing for complete run")
         raise OperationError("Checkout directory is missing; retain state for inspection")
     if state["phase"] == "complete":
-        if git(checkout, "status", "--porcelain"):
-            raise OperationError("Checkout is dirty in complete run; inspect before resuming")
-        base_tree = git(checkout, "rev-parse", f"{state['base_commit']}^{{tree}}")
-        check_provenance(state, checkout, base_tree)
-        head = git(checkout, "rev-parse", "HEAD")
-        if head != state["result_commit"]:
-            raise OperationError("Checkout HEAD does not match result_commit")
-        head_tree = git(checkout, "rev-parse", "HEAD^{tree}")
-        evidence = state["verification_evidence"]
-        intent = state["commit_intent"]
-        if state.get("completion_kind") == "no_change":
-            if state["result_commit"] != state["base_commit"]:
-                raise OperationError("no_change run requires result_commit to match base_commit")
-            if head != state["base_commit"]:
-                raise OperationError("no_change run requires checkout HEAD to match base_commit")
-            if evidence["candidate_tree"] != base_tree:
-                raise OperationError("candidate_tree does not match base_tree in no_change run")
-            if head_tree != base_tree:
-                raise OperationError("checkout HEAD tree does not match base_tree in no_change run")
-        elif state.get("completion_kind") == "committed":
-            if head_tree != evidence["candidate_tree"]:
-                raise OperationError("Checkout HEAD tree does not match verification evidence candidate_tree")
-            parent = git(checkout, "rev-parse", "HEAD^")
-            if parent != state["base_commit"]:
-                raise OperationError("Checkout HEAD parent does not match base_commit")
-            commit_subject = git(checkout, "log", "-1", "--format=%s")
-            if commit_subject != intent["commit_marker"]:
-                raise OperationError("Checkout commit marker does not match commit intent")
-        else:
-            raise OperationError("Unsupported completion_kind")
+        _check_complete_run(root, state)
         print(f"Completed {state['result_commit']} in {checkout}")
         return
     try:
@@ -1587,13 +2085,63 @@ def _read_inputs(root: Path, task_path: Path) -> tuple[Config, Task]:
 
 
 def _check_existing_run(root: Path, oid_length: int) -> None:
-    """Reject an unfinished run while accepting a valid complete checkpoint."""
+    """Reject an unfinished run while accepting complete or safely aborted runs.
+
+    An aborted run is terminal only when its marker binds the current exact
+    checkpoint bytes and no child_pid remains. Otherwise a new run could race a
+    possibly live Worker.
+    """
     checkpoint = root / ".omp/state.json"
-    if not checkpoint.exists():
+    try:
+        checkpoint.stat()
+    except FileNotFoundError:
         return
-    state = _read_state(root, oid_length)
-    if state["phase"] != "complete":
-        raise OperationError("Unfinished run exists; use resume")
+    except OSError as exc:
+        sanitized = _sanitize_exception(exc)
+        raise OperationError(
+            f"Cannot stat checkpoint: {type(exc).__name__}"
+        ) from sanitized
+    snapshot = _read_state_snapshot(
+        checkpoint, oid_length=oid_length, error=OperationError
+    )
+    state = snapshot.state
+
+    marker = _read_abort_marker(root, state["run_id"])
+    if marker is not None:
+        if marker["state_sha256"].lower() != snapshot.digest:
+            raise OperationError(
+                "Abort marker does not match checkpoint bytes; retain run for inspection"
+            )
+        archive = _aborted_state_path(root, state["run_id"])
+        try:
+            archived = archive.read_bytes()
+        except OSError as exc:
+            sanitized = _sanitize_exception(exc)
+            raise OperationError(
+                "Aborted run checkpoint archive is missing; retain run for inspection"
+            ) from sanitized
+        if archived != snapshot.raw:
+            raise OperationError(
+                "Aborted run checkpoint archive does not match state.json; retain both"
+            )
+        if state.get("child_pid") is not None:
+            raise OperationError(
+                "Aborted run still records child_pid; inspect it before starting a new run"
+            )
+        if marker.get("child_pid") is not None:
+            raise OperationError(
+                "Abort marker records child_pid; inspect it before starting a new run"
+            )
+        return
+
+    if state["phase"] == "complete":
+        if state.get("child_pid") is not None:
+            raise OperationError(
+                "Complete run still records child_pid; inspect before starting a new run"
+            )
+        return
+
+    raise OperationError("Unfinished run exists; use resume")
 
 
 def _check_clean(root: Path) -> None:
@@ -1602,13 +2150,555 @@ def _check_clean(root: Path) -> None:
         raise OperationError("Commit or stash project changes before running")
 
 
+def _validate_recovery_request(run_id: str, state_sha256: str) -> str:
+    """Validate run/digest CLI input and return a normalized digest."""
+    if not RUN_ID_PATTERN.fullmatch(run_id):
+        raise InputError("RUN_ID must match [A-Za-z0-9][A-Za-z0-9_-]{0,63}")
+    if not STATE_DIGEST_PATTERN.fullmatch(state_sha256):
+        raise InputError("--state-sha256 must be 64 hexadecimal characters")
+    return state_sha256.lower()
+
+
+def _preflight_recovery(
+    root: Path, run_id: str, expected_digest: str
+) -> tuple[int, StateSnapshot]:
+    """Validate a recovery request before taking the exclusive lock."""
+    _require_git_root(root)
+    oid_length = git_object_id_length(root)
+    snapshot = _read_state_snapshot(
+        root / ".omp/state.json",
+        expected_digest=expected_digest,
+        expected_run_id=run_id,
+        oid_length=oid_length,
+        error=InputError,
+    )
+    return oid_length, snapshot
+
+
+def _revalidate_recovery(
+    root: Path,
+    *,
+    action: str,
+    run_id: str,
+    expected_digest: str,
+    oid_length: int,
+) -> StateSnapshot:
+    """Re-read and revalidate checkpoint bytes under the exclusive lock.
+
+    A run ID or digest change is audited as a refusal. Callers must not mutate
+    the checkpoint after this function returns.
+    """
+    snapshot = _read_state_snapshot(
+        root / ".omp/state.json", oid_length=oid_length, error=OperationError
+    )
+    if snapshot.state["run_id"] != run_id:
+        _audit_refusal(
+            root,
+            action=action,
+            reason_code="state_run_id_mismatch",
+            snapshot=snapshot,
+            message="Checkpoint run_id changed while waiting for the lock; retry",
+        )
+    if snapshot.digest != expected_digest:
+        _audit_refusal(
+            root,
+            action=action,
+            reason_code="state_digest_mismatch",
+            snapshot=snapshot,
+            message=(
+                "Checkpoint bytes changed while waiting for the lock; "
+                "retry with the current --state-sha256"
+            ),
+        )
+    return snapshot
+
+
+def _abort_marker_relative(run_id: str) -> str:
+    """Return the stable relative abort-marker path used in audit events."""
+    return f".omp/runs/{run_id}/{ABORT_MARKER_FILENAME}"
+
+
+def recover(
+    root: Path,
+    run_id: str,
+    state_sha256: str,
+    confirm_child_stopped: bool,
+) -> None:
+    """Prepare an interrupted checkpoint for ``resume`` without running it.
+
+    Side effects:
+        With explicit ``confirm_child_stopped`` and an absent PID, clears only
+        ``state.child_pid`` atomically. Always writes one sanitized audit event.
+        Never starts a Worker/test, kills a process, or modifies the checkout.
+
+    Raises:
+        InputError: invalid arguments or pre-lock checkpoint mismatch.
+        OperationError: contention, refusal, invalid evidence, or checkpoint /
+            audit persistence failure. A false success is never printed.
+    """
+    expected_digest = _validate_recovery_request(run_id, state_sha256)
+    oid_length, _ = _preflight_recovery(root, run_id, expected_digest)
+    checkpoint = root / ".omp/state.json"
+    with lock(root / ".omp/lock"):
+        snapshot = _revalidate_recovery(
+            root,
+            action="recover",
+            run_id=run_id,
+            expected_digest=expected_digest,
+            oid_length=oid_length,
+        )
+        marker_read_error: OperationError | None = None
+        try:
+            marker = _read_abort_marker(root, run_id)
+        except OperationError as exc:
+            marker_read_error = exc
+        if marker_read_error is not None:
+            _audit_refusal(
+                root,
+                action="recover",
+                reason_code="abort_marker_invalid",
+                snapshot=snapshot,
+                message=str(marker_read_error),
+            )
+        if marker is not None:
+            if marker["state_sha256"].lower() != snapshot.digest:
+                _audit_refusal(
+                    root,
+                    action="recover",
+                    reason_code="abort_marker_digest_mismatch",
+                    snapshot=snapshot,
+                    message=(
+                        "Abort marker does not match checkpoint bytes; "
+                        "retain run for inspection"
+                    ),
+                    abort_marker=_abort_marker_relative(run_id),
+                )
+            _audit_refusal(
+                root,
+                action="recover",
+                reason_code="already_aborted",
+                snapshot=snapshot,
+                message=(
+                    "Run was aborted; state, clone and logs were retained; "
+                    "start a new run"
+                ),
+                abort_marker=_abort_marker_relative(run_id),
+            )
+        state = snapshot.state
+        if state["schema_version"] == 1:
+            if state["phase"] != "complete":
+                _audit_refusal(
+                    root,
+                    action="recover",
+                    reason_code="unsupported_schema",
+                    snapshot=snapshot,
+                    message=(
+                        "Cannot recover legacy schema_version 1 run; "
+                        "retain evidence and start a new run"
+                    ),
+                )
+            if state.get("child_pid") is not None:
+                _audit_refusal(
+                    root,
+                    action="recover",
+                    reason_code="complete_child_pid_recorded",
+                    snapshot=snapshot,
+                    message=(
+                        "Complete legacy checkpoint still records child_pid; "
+                        "inspect it before treating the run as complete. "
+                        "OMP did not kill it."
+                    ),
+                )
+            _write_audit_event(
+                root,
+                action="recover",
+                result="no_change",
+                reason_code="legacy_complete",
+                state=state,
+                before_digest=snapshot.digest,
+                after_digest=snapshot.digest,
+                checkpoint_changed=False,
+                child_pid_after=state.get("child_pid"),
+            )
+            print(f"Run {run_id} is already complete; no recovery mutation")
+            return
+        if state["phase"] == "complete":
+            if state.get("child_pid") is not None:
+                _audit_refusal(
+                    root,
+                    action="recover",
+                    reason_code="complete_child_pid_recorded",
+                    snapshot=snapshot,
+                    message=(
+                        "Complete checkpoint still records child_pid; inspect it "
+                        "before treating the run as complete. OMP did not kill it."
+                    ),
+                )
+            try:
+                _check_complete_run(root, state)
+            except (OperationError, OSError, subprocess.SubprocessError) as exc:
+                _audit_refusal(
+                    root,
+                    action="recover",
+                    reason_code="complete_validation_failed",
+                    snapshot=snapshot,
+                    message=str(exc),
+                )
+            _write_audit_event(
+                root,
+                action="recover",
+                result="no_change",
+                reason_code="complete_verified",
+                state=state,
+                before_digest=snapshot.digest,
+                after_digest=snapshot.digest,
+                checkpoint_changed=False,
+                child_pid_after=state.get("child_pid"),
+            )
+            print(f"Run {run_id} is already complete; no recovery mutation")
+            return
+        try:
+            _check_recover_checkout(root, state)
+        except OperationError as exc:
+            _audit_refusal(
+                root,
+                action="recover",
+                reason_code="checkout_unavailable",
+                snapshot=snapshot,
+                message=str(exc),
+            )
+        child_pid = state.get("child_pid")
+        if child_pid is None:
+            _write_audit_event(
+                root,
+                action="recover",
+                result="no_change",
+                reason_code="checkpoint_ready",
+                state=state,
+                before_digest=snapshot.digest,
+                after_digest=snapshot.digest,
+                checkpoint_changed=False,
+                child_pid_after=None,
+            )
+            print(
+                f"Run {run_id} checkpoint is ready for resume; no mutation"
+            )
+            return
+        pid_state = _pid_state(child_pid)
+        if pid_state == "alive":
+            _audit_refusal(
+                root,
+                action="recover",
+                reason_code="child_pid_alive",
+                snapshot=snapshot,
+                message=(
+                    f"Previous child PID {child_pid} is alive; stop it and its "
+                    "descendants outside OMP, then retry. OMP did not kill it."
+                ),
+            )
+        if pid_state == "unknown":
+            _audit_refusal(
+                root,
+                action="recover",
+                reason_code="child_pid_ownership_unknown",
+                snapshot=snapshot,
+                message=(
+                    f"Cannot determine state of previous child PID {child_pid}; "
+                    "ownership is unknown, so recover refuses without killing it."
+                ),
+            )
+        if not confirm_child_stopped:
+            _audit_refusal(
+                root,
+                action="recover",
+                reason_code="child_pid_absent_unconfirmed",
+                snapshot=snapshot,
+                message=(
+                    f"Previous child PID {child_pid} is absent, but absence is "
+                    "not tree-stop proof. Inspect it and its descendants, then "
+                    "rerun with --confirm-child-stopped. OMP did not kill it."
+                ),
+            )
+        normalized = dict(state)
+        normalized["child_pid"] = None
+        validation_error: OperationError | None = None
+        try:
+            updated = validate_state(
+                cast(JsonValue, normalized), oid_length=oid_length
+            )
+        except OperationError as exc:
+            validation_error = exc
+        if validation_error is not None:
+            _audit_refusal(
+                root,
+                action="recover",
+                reason_code="recovered_state_invalid",
+                snapshot=snapshot,
+                message=str(validation_error),
+            )
+        save_error: OSError | None = None
+        try:
+            save(checkpoint, updated)
+        except OSError as exc:
+            save_error = exc
+        if save_error is not None:
+            _audit_error_or_raise(
+                root,
+                action="recover",
+                reason_code="checkpoint_save_failed",
+                snapshot=snapshot,
+                original=save_error,
+                message=(
+                    f"Cannot save recovered checkpoint: {type(save_error).__name__}"
+                ),
+                child_pid_after=child_pid,
+            )
+        digest_error: OperationError | None = None
+        try:
+            after_digest = _read_state_digest(checkpoint)
+        except OperationError as exc:
+            digest_error = exc
+        if digest_error is not None:
+            _audit_error_or_raise(
+                root,
+                action="recover",
+                reason_code="checkpoint_digest_failed",
+                snapshot=snapshot,
+                original=digest_error,
+                message=(
+                    "Checkpoint was saved but its digest could not be read; "
+                    "inspect state before resuming"
+                ),
+                child_pid_after=None,
+                checkpoint_changed=True,
+                after_digest="unknown",
+            )
+        _write_audit_event(
+            root,
+            action="recover",
+            result="success",
+            reason_code="child_pid_absent_operator_attested",
+            state=state,
+            before_digest=snapshot.digest,
+            after_digest=after_digest,
+            checkpoint_changed=True,
+            child_pid_after=None,
+            operator_confirmed_child_stopped=True,
+            containment_proof="operator_attestation_only",
+        )
+        print(
+            f"Recovered run {run_id}: cleared child_pid after operator "
+            "attestation; resume will revalidate evidence"
+        )
+
+
+def abort(root: Path, run_id: str, state_sha256: str) -> None:
+    """Mark an unfinished run as aborted without deleting evidence.
+
+    Side effects:
+        Writes an exact checkpoint archive and an atomic abort marker, then an
+        audit event. The live checkpoint, clone, logs and provenance are kept.
+        Never kills a process, clears child_pid, runs a Worker, or claims that a
+        process tree stopped.
+
+    Raises:
+        InputError: invalid arguments or pre-lock checkpoint mismatch.
+        OperationError: contention, refusal, or archive/marker/audit failure.
+    """
+    expected_digest = _validate_recovery_request(run_id, state_sha256)
+    oid_length, _ = _preflight_recovery(root, run_id, expected_digest)
+    with lock(root / ".omp/lock"):
+        snapshot = _revalidate_recovery(
+            root,
+            action="abort",
+            run_id=run_id,
+            expected_digest=expected_digest,
+            oid_length=oid_length,
+        )
+        marker_read_error: OperationError | None = None
+        try:
+            marker = _read_abort_marker(root, run_id)
+        except OperationError as exc:
+            marker_read_error = exc
+        if marker_read_error is not None:
+            _audit_refusal(
+                root,
+                action="abort",
+                reason_code="abort_marker_invalid",
+                snapshot=snapshot,
+                message=str(marker_read_error),
+            )
+        state = snapshot.state
+        if marker is not None:
+            if marker["state_sha256"].lower() != snapshot.digest:
+                _audit_refusal(
+                    root,
+                    action="abort",
+                    reason_code="abort_marker_digest_mismatch",
+                    snapshot=snapshot,
+                    message=(
+                        "Abort marker does not match checkpoint bytes; "
+                        "retain run for inspection"
+                    ),
+                    abort_marker=_abort_marker_relative(run_id),
+                )
+            archive = _aborted_state_path(root, run_id)
+            archive_restore_error: OSError | None = None
+            try:
+                if archive.exists():
+                    if archive.read_bytes() != snapshot.raw:
+                        _audit_refusal(
+                            root,
+                            action="abort",
+                            reason_code="aborted_state_conflict",
+                            snapshot=snapshot,
+                            message=(
+                                "Existing aborted-state archive does not match "
+                                "the current checkpoint; retain both for inspection"
+                            ),
+                            abort_marker=_abort_marker_relative(run_id),
+                        )
+                else:
+                    _write_bytes_atomic(archive, snapshot.raw)
+            except OSError as exc:
+                archive_restore_error = exc
+            if archive_restore_error is not None:
+                _audit_error_or_raise(
+                    root,
+                    action="abort",
+                    reason_code="aborted_state_save_failed",
+                    snapshot=snapshot,
+                    original=archive_restore_error,
+                    message=(
+                        f"Cannot restore aborted checkpoint archive: "
+                        f"{type(archive_restore_error).__name__}"
+                    ),
+                    child_pid_after=state.get("child_pid"),
+                    abort_marker=_abort_marker_relative(run_id),
+                )
+            _write_audit_event(
+                root,
+                action="abort",
+                result="no_change",
+                reason_code="already_aborted",
+                state=state,
+                before_digest=snapshot.digest,
+                after_digest=snapshot.digest,
+                checkpoint_changed=False,
+                child_pid_after=state.get("child_pid"),
+                abort_marker=_abort_marker_relative(run_id),
+            )
+            print(f"Run {run_id} is already aborted; no change")
+            return
+        if state.get("child_pid") is not None:
+            _audit_refusal(
+                root,
+                action="abort",
+                reason_code="child_pid_still_recorded",
+                snapshot=snapshot,
+                message=(
+                    "Run still records a child_pid; resolve only after external "
+                    "inspection with recover --confirm-child-stopped, then abort. "
+                    "OMP did not kill or stop it."
+                ),
+            )
+        if state["phase"] == "complete":
+            _write_audit_event(
+                root,
+                action="abort",
+                result="no_change",
+                reason_code="already_complete",
+                state=state,
+                before_digest=snapshot.digest,
+                after_digest=snapshot.digest,
+                checkpoint_changed=False,
+                child_pid_after=state.get("child_pid"),
+            )
+            print(f"Run {run_id} is already complete; nothing to abort")
+            return
+        archive = _aborted_state_path(root, run_id)
+        marker_path = _abort_marker_path(root, run_id)
+        archive_save_error: OSError | None = None
+        try:
+            if archive.exists():
+                if archive.read_bytes() != snapshot.raw:
+                    _audit_refusal(
+                        root,
+                        action="abort",
+                        reason_code="aborted_state_conflict",
+                        snapshot=snapshot,
+                        message=(
+                            "Existing aborted-state archive does not match the "
+                            "current checkpoint; retain both for inspection"
+                        ),
+                    )
+            else:
+                _write_bytes_atomic(archive, snapshot.raw)
+        except OSError as exc:
+            archive_save_error = exc
+        if archive_save_error is not None:
+            _audit_error_or_raise(
+                root,
+                action="abort",
+                reason_code="aborted_state_save_failed",
+                snapshot=snapshot,
+                original=archive_save_error,
+                message=(
+                    f"Cannot archive checkpoint before abort: "
+                    f"{type(archive_save_error).__name__}"
+                ),
+                child_pid_after=state.get("child_pid"),
+            )
+        marker_event: JsonObject = {
+            "schema_version": ABORT_MARKER_SCHEMA_VERSION,
+            "action": "abort",
+            "run_id": run_id,
+            "state_sha256": snapshot.digest,
+            "child_pid": state.get("child_pid"),
+            "created_utc": _utc_timestamp(),
+        }
+        marker_save_error: OSError | None = None
+        try:
+            save(marker_path, marker_event)
+        except OSError as exc:
+            marker_save_error = exc
+        if marker_save_error is not None:
+            _audit_error_or_raise(
+                root,
+                action="abort",
+                reason_code="abort_marker_save_failed",
+                snapshot=snapshot,
+                original=marker_save_error,
+                message=f"Cannot persist abort marker: {type(marker_save_error).__name__}",
+                child_pid_after=state.get("child_pid"),
+                abort_marker=_abort_marker_relative(run_id),
+            )
+        _write_audit_event(
+            root,
+            action="abort",
+            result="success",
+            reason_code="aborted",
+            state=state,
+            before_digest=snapshot.digest,
+            after_digest=snapshot.digest,
+            checkpoint_changed=False,
+            child_pid_after=state.get("child_pid"),
+            abort_marker=_abort_marker_relative(run_id),
+        )
+        print(
+            f"Aborted run {run_id}; checkpoint, clone, logs and provenance "
+            "were retained"
+        )
+
+
 def main() -> None:
     """Run the ``omp`` command line interface.
 
     Expected input and operation failures print ``OMP: <message>`` to stderr
     and exit 1 without a traceback. Successful commands return normally.
-    ``run`` and ``resume`` validate authoritative data before the lock and
-    validate it again after acquiring the lock before any mutation.
+    ``run``, ``resume``, ``recover``, and ``abort`` validate authoritative data
+    before the lock and validate it again after acquiring the lock before any
+    mutation. ``recover`` never runs a Worker; ``abort`` only writes sidecars.
 
     Side effects:
         Dispatches to state, lock, Git, process, and filesystem operations
@@ -1621,6 +2711,13 @@ def main() -> None:
     run = sub.add_parser("run")
     run.add_argument("task", type=Path)
     sub.add_parser("resume")
+    recover_parser = sub.add_parser("recover")
+    recover_parser.add_argument("run_id")
+    recover_parser.add_argument("--state-sha256", required=True)
+    recover_parser.add_argument("--confirm-child-stopped", action="store_true")
+    abort_parser = sub.add_parser("abort")
+    abort_parser.add_argument("run_id")
+    abort_parser.add_argument("--state-sha256", required=True)
     sub.add_parser("status")
     args = parser.parse_args()
     root = args.root.resolve()
@@ -1643,6 +2740,17 @@ def main() -> None:
                     "timeout_seconds": 600,
                 })
                 print(f"Created {path}; review worker and test commands before running")
+            return
+        if args.command == "recover":
+            recover(
+                root,
+                args.run_id,
+                args.state_sha256,
+                args.confirm_child_stopped,
+            )
+            return
+        if args.command == "abort":
+            abort(root, args.run_id, args.state_sha256)
             return
         if args.command == "run":
             _require_git_root(root)
@@ -1668,12 +2776,14 @@ def main() -> None:
             return
         oid_length = git_object_id_length(root)
         state = _read_state(root, oid_length)
+        _check_not_aborted(root, state)
         if state["schema_version"] == 1 and state["phase"] != "complete":
             raise OperationError(
                 "Cannot resume run with schema_version 1; retain run/checkout and start a new run"
             )
         with lock(root / ".omp/lock"):
             state = _read_state(root, oid_length)
+            _check_not_aborted(root, state)
             if state["schema_version"] == 1 and state["phase"] != "complete":
                 raise OperationError(
                     "Cannot resume run with schema_version 1; retain run/checkout and start a new run"
