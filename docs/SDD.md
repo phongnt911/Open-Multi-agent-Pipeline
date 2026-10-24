@@ -69,10 +69,19 @@ cạnh file và whitelist sau thực thi không phải ranh giới bảo mật. 
 phải chuẩn bị trước và nằm ngoài phạm vi task. File ignored và Git metadata
 chưa được bảo vệ trước Worker đối kháng. Không dùng DB production.
 
+SEC-01 đã chứng minh trên fixture rằng AppContainer/lowbox bị OS từ chối đọc/
+ghi canary source/runtime/vault/config/audit/credentials, với same-user control
+chứng minh denial không phải lỗi ACL toàn cục. Đây là candidate boundary, chưa
+tích hợp runner; tài sản thật, credential, network, inherited handle và Worker
+CLI/Python/provider thật vẫn NOT PROVEN. Xem
+[threat model](security/THREAT-MODEL.md) và
+[ADR-0006](decisions/0006-windows-isolation.md).
+
 ## Tiếp theo
 
 1. Cách ly quyền OS, test runner và vault ngoài quyền ghi của Worker.
 2. Nghiệm thu PROC-03 recovery/abort command có digest/lock/audit; G2 vẫn mở.
+   thực hiện SEC-01 threat model/proof Windows trước khi triển khai security boundary G3.
 3. Retry/failover hữu hạn sau khi xác nhận provider cũ đã dừng.
 4. Planner/reviewer có ngân sách gọi; diff tính từ baseline feature.
 5. Migration trên DB phát triển riêng, nhật ký và quy tắc chạy lại.
