@@ -29,17 +29,36 @@ Commit đã có: đối soát HEAD, parent, marker và tree OID với intent/evi
 Khớp thì hoàn tất idempotent không tạo commit trùng; lệch thì fail-closed.
 No-op task hoàn tất idempotent với `completion_kind = no_change`.
 
-PID còn lưu chặn resume. Sau crash cứng, người vận hành xác minh cây tiến trình
-đã dừng trước khi bỏ chặn. Clone dở cần xử lý thủ công. Worker dở được gọi lại
-với thay đổi hiện tại; test lỗi không tự gọi lại Worker hay đổi provider.
-Resume trên checkpoint v1 dở dang bị chặn trước mutation để bảo toàn dữ liệu.
+PID còn lưu chặn resume. CLI `recover RUN_ID --state-sha256 HEX` đọc/validate
+checkpoint và lock; `HEX` là SHA-256 bytes thô `.omp/state.json`. Lệnh không
+chạy Worker/test, không sửa checkout/commit. Nếu `child_pid` còn, PID sống hoặc
+unknown thì refuse và không kill. Chỉ khi PID absent và người vận hành truyền
+`--confirm-child-stopped` (sau khi tự kiểm tra cả cây) lệnh mới clear đúng
+`child_pid`; audit ghi `operator_attestation_only`, không phải proof OS. Complete
+state được đối soát intent/evidence/HEAD/tree nhưng không mutation; complete còn
+`child_pid` bị coi là không nhất quán.
+
+CLI `abort RUN_ID --state-sha256 HEX` không xóa checkpoint/clone/log/commit.
+Nó archive exact bytes state vào `.omp/runs/<run_id>/aborted-state.json`, ghi
+marker `aborted.json` và audit; idempotent, không kill, refuse nếu còn
+`child_pid`. `resume`/`recover` từ chối run đã abort; `run` chỉ bắt đầu run mới
+khi marker/archive khớp exact bytes cũ và `child_pid` null (kể cả khi checkpoint
+ở phase complete, có marker thì bắt buộc đối soát exact bytes trước mọi shortcut).
+Clone dở được giữ nguyên và xử lý bằng abort + run mới; recover không tự clone lại. Worker dở
+được gọi lại với thay đổi hiện tại; test lỗi không tự gọi lại Worker hay đổi
+provider. Resume/recover trên checkpoint v1 dở dang bị chặn trước mutation để
+bảo toàn dữ liệu; v1 complete chỉ audit read-only.
 
 Trên Windows, process runner tạo Worker/test suspended trong Job Object riêng
 với `KILL_ON_JOB_CLOSE`, gắn job ngay bằng `PROC_THREAD_ATTRIBUTE_JOB_LIST` và
 chỉ resume sau khi save `child_pid`. Root exit còn con/cháu, timeout, Ctrl+C
 hoặc cleanup lỗi đều terminate job trước khi fail-closed. Chỉ xóa `child_pid`
 khi job rỗng; owner hard-kill làm OS đóng job handle và dừng cây. Job Object
-không phải sandbox quyền OS.
+không phải sandbox quyền OS. Sau owner death, recovery không mở lại được job
+handle cũ để query `ActiveProcesses`; vì vậy `recover` không suy diễn tree-stop
+từ PID absent hay checkout và không tuyên bố containment proof. `KILL_ON_JOB_CLOSE`
+vẫn là lifecycle containment hiện có, không thay thế audit/attestation của
+PROC-03.
 
 ## Ranh giới tin cậy
 
@@ -53,8 +72,7 @@ chưa được bảo vệ trước Worker đối kháng. Không dùng DB product
 ## Tiếp theo
 
 1. Cách ly quyền OS, test runner và vault ngoài quyền ghi của Worker.
-2. Nghiệm thu PROC-02 (container Windows native), rồi PROC-03 recovery command
-   có đối soát thay vì sửa `child_pid`/phase thủ công.
+2. Nghiệm thu PROC-03 recovery/abort command có digest/lock/audit; G2 vẫn mở.
 3. Retry/failover hữu hạn sau khi xác nhận provider cũ đã dừng.
 4. Planner/reviewer có ngân sách gọi; diff tính từ baseline feature.
 5. Migration trên DB phát triển riêng, nhật ký và quy tắc chạy lại.

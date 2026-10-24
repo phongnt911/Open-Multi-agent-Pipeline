@@ -10,7 +10,9 @@ input cũ không có version được nhận như legacy v0 và chuẩn hóa tro
 State v1 cũ được hỗ trợ đọc/status ở chế độ read-only không rewrite đĩa; resume
 trên state v1 chưa hoàn tất bị chặn trước mutation. Migration tự động và crash
 matrix sâu thuộc REC-02/PROC; containment Windows đã có primitive native ở
-PROC-02 (REVIEW), chưa phải gate bảo mật.
+PROC-02 (đã merge), chưa phải gate bảo mật. PROC-03 (REVIEW) thêm `recover`/
+`abort` có digest/run binding, lock, audit và sidecar archive; không đổi
+checkpoint schema.
 
 ## Schema dữ liệu REC-01
 
@@ -19,6 +21,8 @@ PROC-02 (REVIEW), chưa phải gate bảo mật.
 | Config | 1; thiếu version là legacy v0 | `worker_argv`, `test_argv`, `timeout_seconds` | - | Legacy được normalize trong memory; argv nonempty string, không NUL; timeout integer `1..86400` |
 | Task | 1; thiếu version là legacy v0 | `specification`, `allowed_files_to_modify` | - | Specification nonempty; allowed path là file path tương đối chính xác dùng `/` |
 | State | 2 (hỗ trợ đọc v1 read-only) | `run_id`, `phase`, `base_commit`, `config`, `task` | `child_pid`, `last_error`, `result_commit`, `verification_evidence`, `commit_intent`, `completion_kind` | `committing`/`complete` bắt buộc `verification_evidence` (`candidate_tree`, `command_hash`, `task_hash`, `run_id`, `exit_code: 0`) và `commit_intent` (`run_id`, `base_commit`, `expected_tree`, `commit_marker`); `complete` bắt buộc thêm `result_commit` và `completion_kind`. Bắt buộc `intent.expected_tree == evidence.candidate_tree`. |
+| Abort marker | 1 (sidecar) | `schema_version`, `action`, `run_id`, `state_sha256`, `child_pid`, `created_utc` | - | Ở `.omp/runs/<run_id>/aborted.json`; `state_sha256` là SHA-256 bytes thô checkpoint được lưu tại `aborted-state.json`. Không phải field của state. |
+| Audit event | 1 (sidecar) | `schema_version`, `timestamp_utc`, `action`, `result`, `reason_code`, `run_id`, `state_path`, `before_sha256`, `after_sha256`, `phase_before`, `phase_after`, `state_schema_version`, `child_pid_before`, `child_pid_after`, `checkpoint_changed`, `operator_confirmed_child_stopped`, `containment_proof`, `abort_marker` | - | Ở `.omp/audit/<run_id>/<timestamp>-<uuid>.json`; atomic, không chứa config/task/argv/prompt/log/token/raw exception command. `after_sha256` là SHA-256 sau thao tác (bằng `before_sha256` nếu `checkpoint_changed: false`), hoặc chuỗi `"unknown"` nếu `checkpoint_changed: true` nhưng digest mới không đọc được (ví dụ `checkpoint_digest_failed`). |
 
 - Unknown field bị từ chối ở mọi object config/task/state, kể cả object lồng
   trong state. Không có field retry/budget giả khi chưa có consumer.
@@ -44,6 +48,22 @@ PROC-02 (REVIEW), chưa phải gate bảo mật.
   trong lock trước clone/process/checkpoint mutation. `status` chỉ đọc, không
   ghi state. Lỗi config/task là `InputError`; lỗi state là `OperationError`;
   CLI trả nonzero, không traceback cho lỗi dự kiến.
+- `recover RUN_ID --state-sha256 HEX` chỉ đọc/validate state và lock, không
+  chạy Worker/test, không sửa checkout/commit. Mặc định refuse khi còn
+  `child_pid`; chỉ clear `child_pid` khi PID ở trạng thái absent và người vận
+  hành truyền `--confirm-child-stopped`. Đây là attestation, không phải proof
+  ownership/tree-stop; PID sống/unknown bị refuse, không kill. Complete state
+  vẫn đối soát provenance/evidence/intent/HEAD/tree; complete còn `child_pid`
+  bị coi là không nhất quán.
+- `abort RUN_ID --state-sha256 HEX` không xóa checkpoint/clone/log/commit;
+  archive exact state bytes vào `.omp/runs/<run_id>/aborted-state.json`, ghi
+  marker `aborted.json`, rồi audit. Abort idempotent, không kill, không clear
+  `child_pid`; nếu `child_pid` còn ghi thì refuse. `resume`/`recover` từ chối
+  run đã abort; `run` chỉ bắt đầu run mới khi marker + archive khớp đúng bytes
+  state cũ và `child_pid` null. Nếu abort marker tồn tại bên cạnh checkpoint
+  (kể cả phase complete), marker và archive bắt buộc phải được validate và đối
+  soát đúng exact bytes trước khi cho phép bắt đầu run mới; marker/archive lệch,
+  hỏng hoặc thiếu fail-closed trước mọi shortcut phase complete.
 
 ## Bất biến bắt buộc
 
@@ -80,7 +100,8 @@ PROC-02 (REVIEW), chưa phải gate bảo mật.
   không thay thế yêu cầu job-list); môi trường không hỗ trợ bị từ chối, không
   silently fallback.
 - POSIX giữ process group + SIGKILL baseline. `child_pid` vẫn là guard sau crash
-  cứng; PROC-02 không thêm recovery command tự động (thuộc PROC-03).
+  cứng; PROC-03 `recover` chỉ phân loại PID read-only và cần explicit operator
+  attestation, không tự kill hay chứng minh ownership.
 
 ## Ranh giới module mục tiêu
 
@@ -116,12 +137,15 @@ Không import CLI từ lớp thấp; không để provider tự ghi state hoặc
   khi clone/checkout dở; ghi nhận giới hạn spawn-gap và bằng chứng Windows.
 - `process`: owner identity, PID + dấu nhận diện đời tiến trình/OS containment;
   PID đơn lẻ không đủ chứng minh ownership. Trên Windows, job handle
-  kill-on-close + kiểm tra job rỗng là bằng chứng containment; owner hard-kill
-  làm OS kill cây (PROC-01/PROC-02).
-- `process lock`: `run`/`resume`/`init` giữ OS lock độc quyền non-blocking;
-  lock tự nhả khi process chết, không unlink lock file để phá stale; `status`
-  chỉ đọc và không lấy lock. OS lock chỉ serialize orchestrator, không thay
-  `child_pid` guard hoặc containment process tree (PROC-01/PROC-02).
+  kill-on-close + kiểm tra job rỗng là bằng chứng containment trong phiên;
+  owner hard-kill làm OS kill cây nhưng không persist handle để recovery query
+  lại. PROC-03 không kill theo PID và chỉ clear guard bằng explicit attestation
+  khi PID absent (PROC-01/PROC-02/PROC-03).
+- `process lock`: `run`/`resume`/`recover`/`abort`/`init` giữ OS lock độc
+  quyền non-blocking; lock tự nhả khi process chết, không unlink lock file để
+  phá stale; `status` chỉ đọc và không lấy lock. OS lock chỉ serialize
+  orchestrator, không thay `child_pid` guard hoặc containment process tree
+  (PROC-01/PROC-02/PROC-03).
 - `limits`: attempt/call/time budgets hữu hạn; restart không reset budget
   (PROV-02/PIPE-01).
 - `error`: mã lỗi ổn định, phase/operation, retryability, message đã redaction;

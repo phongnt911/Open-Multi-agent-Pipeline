@@ -13,7 +13,14 @@ omp init
 omp run C:\path\to\task.json
 omp status
 omp resume
+# Sau crash có child_pid cần xử lý, dùng digest bytes thô của checkpoint:
+omp recover <run_id> --state-sha256 <sha256>
+omp abort <run_id> --state-sha256 <sha256>
 ```
+
+`--state-sha256` là SHA-256 của đúng bytes `.omp/state.json`, không phải JSON
+đã normalize. Có thể lấy read-only bằng
+`python -c "import hashlib,pathlib; print(hashlib.sha256(pathlib.Path('.omp/state.json').read_bytes()).hexdigest())"`.
 
 Repo mục tiêu phải có commit, working tree sạch và bỏ qua `.omp/` trong
 `.gitignore`. Provider mặc định là Codex CLI đã đăng nhập, nhận prompt qua
@@ -77,13 +84,29 @@ có thể fetch commit từ clone rồi cherry-pick thủ công.
   `child_pid` khi job đã rỗng; cleanup không chứng minh được thì giữ PID và
   fail-closed. Không fallback sang spawn không containment.
 - POSIX giữ process group + SIGKILL. Sau crash cứng, PID còn lưu sẽ chặn
-  resume: phải xác minh tiến trình và các con đã dừng rồi đặt `child_pid`
-  thành `null` trong state. Không tự nhận diện tiến trình qua PID tái sử dụng.
+  resume. `recover` kiểm tra run ID, digest bytes checkpoint, lock, phase và
+  checkout; mặc định không kill và không clear `child_pid`. Nếu PID đã absent,
+  người vận hành phải tự xác minh PID và toàn bộ cây tiến trình đã dừng, rồi
+  mới chạy `recover --confirm-child-stopped`. Lệnh chỉ clear `child_pid`, lưu
+  audit `operator_attestation_only`; đây không phải bằng chứng OS và không tự
+  chạy Worker. PID còn sống/không xác định bị refuse.
+- `abort` giữ nguyên checkpoint, clone, logs, checkout và provenance; nó chỉ
+  archive exact bytes state vào `.omp/runs/<run_id>/aborted-state.json`, ghi
+  marker `aborted.json` và audit. `abort` idempotent, không kill và refuse nếu
+  checkpoint còn `child_pid` (xử lý `recover` trước). Run đã abort bị
+  `resume`/`recover` từ chối; `run` chỉ được bắt đầu run mới khi marker và
+  archive khớp đúng bytes state cũ và `child_pid` là null.
+- Mọi `run`/`resume`/`recover`/`abort` dùng cùng OS lock; audit nằm dưới
+  `.omp/audit/<run_id>/` và không chứa config, task, argv, prompt, log hoặc
+  token. Lỗi audit/checkpoint không được báo success; xem ADR-0005.
 - Worker dở được gọi lại trong phiên mới với thay đổi hiện tại. Test thất bại
   giữ nguyên checkout; resume chạy lại test. Sau khi kiểm tra, có thể đổi
   `phase` thành `worker` để yêu cầu sửa tiếp. Chưa tự retry/failover.
-- Clone bị gián đoạn tại `preparing` cần lưu trữ run và di chuyển state cũ
-  ra ngoài trước khi bắt đầu run mới; chưa tự phục hồi bước clone.
+- Clone bị gián đoạn tại `preparing` được giữ nguyên. Dùng `abort` để archive
+  state và đánh dấu run cũ, sau đó `run` mới; `recover` không tự phục hồi clone.
+- `recover` trên run `complete` chỉ đối soát intent/tree/commit và audit, không
+  đổi phase hay chạy lại test/Worker. State legacy v1 dở dang bị từ chối;
+  checkpoint v1 complete chỉ được đọc/audit read-only.
 - **Clone không phải sandbox OS.** MVP dành cho Worker hợp tác, chạy với
   sandbox của provider. Job Object chỉ kiểm soát vòng đời process, không hạn
   chế quyền file/network/credential. Cùng tài khoản OS vẫn có thể truy cập repo
@@ -115,7 +138,7 @@ trên Python 3.10/3.12, không gọi AI thật hoặc tự publish.
 [Quy trình điều phối/review AI](docs/COORDINATION.md) quy định quyền giao việc
 và nghiệm thu. FND-01/FND-02, G0, [DAT-01](docs/tasks/DAT-01.md) và
 [REC-01](docs/tasks/REC-01.md), [REC-02](docs/tasks/REC-02.md) đã nghiệm thu và tích hợp.
-G1 DONE theo [quyết định điều phối](docs/reviews/G1-CLOSURE.md); PROC-01 đã
-merge/nghiệm thu. [PROC-02](docs/tasks/PROC-02.md) đang ở trạng thái REVIEW,
+G1 DONE theo [quyết định điều phối](docs/reviews/G1-CLOSURE.md); PROC-01 và
+PROC-02 đã merge/nghiệm thu. [PROC-03](docs/tasks/PROC-03.md) đang REVIEW,
 G2 vẫn mở. AI thực thi bàn giao để reviewer nghiệm thu, không tự push main
 hoặc nhận tiếp task khác.
