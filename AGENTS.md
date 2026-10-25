@@ -35,7 +35,7 @@ và chính sách môi trường có độ ưu tiên cao hơn tài liệu này.
 
 ## Chuẩn mã và dữ liệu
 
-- Python >=3.10; UTF-8, LF, 4 spaces. Tên code/log dùng tiếng Anh;
+- Python >=3.12; UTF-8, LF, 4 spaces. Tên code/log dùng tiếng Anh;
   hướng dẫn và giải thích ưu tiên tiếng Việt.
 - Hàm production mới hoặc thay đổi chữ ký MUST có type hints; public API
   có docstring nêu tác dụng phụ/lỗi quan trọng. Code MVP cũ chưa đạt được theo
@@ -57,8 +57,10 @@ và chính sách môi trường có độ ưu tiên cao hơn tài liệu này.
 - Code có thay đổi hành vi cần regression test thất bại trước bản sửa và
   đạt sau bản sửa; đường lỗi/phục hồi phải có test riêng khi liên quan.
 - Sửa docs cùng code nếu CLI/schema/hành vi hoặc ranh giới tin cậy đổi.
-- PR về process/recovery/security cần bằng chứng trên Windows; Linux không
-  thay thế Windows. CI xanh không chứng minh cách ly OS hoặc chịu mất điện.
+- Nền tảng hỗ trợ: Windows. Python 3.12 là baseline; CI bắt buộc Windows
+  Python 3.12 và 3.14. Linux/POSIX không còn thuộc phạm vi hỗ trợ hoặc CI.
+- PR về process/recovery/security cần bằng chứng Windows thật trên cả hai
+  phiên bản Python. CI xanh không chứng minh cách ly OS hoặc chịu mất điện.
 - Không ghi DONE khi chưa đủ bằng chứng; dùng BLOCKED kèm lý do nếu cần.
 - Handoff theo template; ghi file thay đổi, lệnh test, kết quả, giới hạn và
   bước tiếp theo. Không tuyên bố tính năng bảo mật vượt quá kiểm thử đã có.

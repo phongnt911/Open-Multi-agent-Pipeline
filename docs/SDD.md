@@ -1,5 +1,15 @@
 # Thiết kế OMP — MVP 0.1
 
+
+## Nền tảng được hỗ trợ
+
+Windows là nền tảng duy nhất được hỗ trợ và chạy CI từ 2026-10-25. Python
+3.12 là baseline dùng ngay; 3.14 được thêm vào CI sau full Windows tests và
+package/proof smoke. requires-python >=3.12 là mức tối thiểu; không tự suy
+phiên bản Python khác đã được kiểm chứng. Linux/POSIX và Python 3.10 không
+còn thuộc matrix; nhánh code cũ được giữ nguyên, không cam kết hỗ trợ. Không
+xóa hoặc viết lại evidence Linux/3.10 của các lần nghiệm thu trước.
+
 ## Luồng
 
 `preparing → worker → verifying → committing → complete`
@@ -80,7 +90,7 @@ CLI/Python/provider thật vẫn NOT PROVEN. Xem
 ## Tiếp theo
 
 1. Cách ly quyền OS, test runner và vault ngoài quyền ghi của Worker.
-2. Nghiệm thu PROC-03 recovery/abort command có digest/lock/audit; G2 vẫn mở.
+2. SEC-01 DONE; SEC-02 giai đoạn A kiểm chứng Python/runner dưới boundary trước khi tích hợp production; G3 vẫn mở.
    thực hiện SEC-01 threat model/proof Windows trước khi triển khai security boundary G3.
 3. Retry/failover hữu hạn sau khi xác nhận provider cũ đã dừng.
 4. Planner/reviewer có ngân sách gọi; diff tính từ baseline feature.

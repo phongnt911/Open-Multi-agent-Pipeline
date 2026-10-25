@@ -61,3 +61,13 @@ ghi SHA trong handoff; nếu chưa, giao diff và danh sách file để review t
 Không giao main cho nhiều người cùng ghi. Không force-push và không dùng
 reset/clean để giải quyết xung đột. Sau tích hợp phải chạy checks trên tree cuối.
 Thay đổi làm invalid evidence phải chạy lại check liên quan trước nghiệm thu.
+
+## Chính sách thực thi từ 2026-10-25
+
+Theo chỉ đạo chủ dự án: bỏ Linux khỏi phạm vi hỗ trợ/CI, dùng Python 3.12
+ngay; chỉ thêm Python 3.14 sau kiểm chứng Windows thực tế. Baseline package
+>=3.12, .python-version=3.12; CI Windows 3.12/3.14 bắt buộc test, packaging và
+entrypoint ngoài source trên exact SHA. Không dùng 3.14 để thay baseline 3.12.
+Không sửa lại evidence Linux/3.10 trong review history; đó là bằng chứng lịch sử.
+SEC-02 được giao giai đoạn A theo docs/tasks/SEC-02.md; chưa được triển khai
+production boundary hoặc nhận SEC-03 trước checkpoint review quy định ở task.
