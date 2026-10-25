@@ -1,4 +1,4 @@
-"""Offline repository checks. Run from any directory with Python 3.10+."""
+"""Offline repository checks. Run from any directory with Python 3.12+ on Windows."""
 import ast
 import json
 from pathlib import Path

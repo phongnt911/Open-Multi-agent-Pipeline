@@ -9,7 +9,7 @@
 - [ ] `python tools/check.py` đạt
 - [ ] Regression/failure cases liên quan đạt
 - [ ] Docs/contracts cập nhật khi cần
-- [ ] CI Windows/Linux đạt trên revision này
+- [ ] CI Windows Python 3.12 và 3.14 đạt trên exact revision này
 - Lệnh, OS, Python, kết quả; check chưa chạy:
 
 ## Rủi ro và review

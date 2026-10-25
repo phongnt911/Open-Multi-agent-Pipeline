@@ -32,7 +32,8 @@ với runtime OMP, nơi một run vẫn chỉ có một Worker hoạt động.
 - Không giảm phạm vi test hoặc bỏ failure để làm pipeline xanh.
 - Không có lỗi có thể làm mất sửa đổi nguồn, chạy trùng Worker hoặc báo test
   đạt sai. Các lỗi này chặn merge bất kể tính năng khác hoạt động.
-- CI bắt buộc cho mọi PR: Windows/Linux × Python 3.10/3.12; test không có mạng,
+- Nền tảng hỗ trợ là Windows; Python 3.12 dùng ngay làm baseline phát triển.
+- CI bắt buộc cho mọi PR: Windows × Python 3.12/3.14; test không có mạng,
   không dùng AI thật hoặc credentials. Packaging smoke dùng package đã cài.
 - Reviewer khác tác giả khi có thể; security gate cần review độc lập. Nếu chỉ
   một người, ghi rõ thiếu review độc lập và không tuyên bố gate security đã đạt.
@@ -49,3 +50,12 @@ quyền của môi trường. Không đánh dấu PASS cho check chưa chạy. C
 Python version, số test và exit code phải gắn với revision/diff được review.
 Đổi quyết định kiến trúc dùng ADR trong `docs/decisions/` với lý do và migration.
 Không bỏ gate bằng ngoại lệ im lặng; người dùng quyết định đổi phạm vi rõ ràng.
+
+## Chính sách nền tảng từ 2026-10-25
+
+Python tối thiểu 3.12 (pyproject.toml và .python-version). Chạy tools/check.py,
+package install/entrypoint smoke và các proof Windows liên quan trên 3.12/3.14.
+Không thêm Linux/POSIX hoặc Python 3.10 trở lại CI để mở rộng scope ngầm.
+Không suy test parser phụ thuộc thông điệp CPython là hợp đồng ứng dụng; nếu
+khác biệt xảy ra phải giữ cause/type và chứng minh fail trước/pass sau trước
+khi sửa test. Evidence và reviews lịch sử vẫn giữ nguyên phiên bản đã chạy.

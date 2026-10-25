@@ -10,7 +10,7 @@ input cũ không có version được nhận như legacy v0 và chuẩn hóa tro
 State v1 cũ được hỗ trợ đọc/status ở chế độ read-only không rewrite đĩa; resume
 trên state v1 chưa hoàn tất bị chặn trước mutation. Migration tự động và crash
 matrix sâu thuộc REC-02/PROC; containment Windows đã có primitive native ở
-PROC-02 (đã merge), chưa phải gate bảo mật. PROC-03 (REVIEW) thêm `recover`/
+PROC-02 (đã merge), chưa phải gate bảo mật. PROC-03 (DONE) thêm `recover`/
 `abort` có digest/run binding, lock, audit và sidecar archive; không đổi
 checkpoint schema.
 
@@ -103,7 +103,7 @@ checkpoint schema.
   cứng; PROC-03 `recover` chỉ phân loại PID read-only và cần explicit operator
   attestation, không tự kill hay chứng minh ownership.
 
-## Cách ly quyền OS trên Windows (SEC-01 REVIEW)
+## Cách ly quyền OS trên Windows (SEC-01 DONE: fixture proof)
 
 - SEC-01 chọn AppContainer/lowbox làm candidate boundary; ADR-0006 và
   `docs/security/THREAT-MODEL.md` là nguồn chi tiết. Đây chưa phải cam kết
@@ -169,3 +169,12 @@ Không import CLI từ lớp thấp; không để provider tự ghi state hoặc
   (PROV-02/PIPE-01).
 - `error`: mã lỗi ổn định, phase/operation, retryability, message đã redaction;
   CLI trả nonzero cho invalid input, blocked và failed operation (PROV-02/UX-01).
+
+## Nền tảng được hỗ trợ
+
+Windows là nền tảng duy nhất được hỗ trợ và chạy CI từ 2026-10-25. Python
+3.12 là baseline dùng ngay; 3.14 là lane compatibility bắt buộc sau full
+Windows tests và package smoke. Native security proof được ghi riêng theo runtime. requires-python >=3.12 là mức tối thiểu; không tự suy
+phiên bản Python khác đã được kiểm chứng. Linux/POSIX và Python 3.10 không
+còn thuộc matrix; nhánh code cũ được giữ nguyên, không cam kết hỗ trợ. Không
+xóa hoặc viết lại evidence Linux/3.10 của các lần nghiệm thu trước.

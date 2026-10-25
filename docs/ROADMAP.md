@@ -1,16 +1,17 @@
 # Lộ trình OMP
 
-Ngày lập: 2026-10-21. Lộ trình theo gate, không theo ngày hứa hoàn thành.
-Mỗi gate chỉ đóng khi có bằng chứng test/review. Trạng thái ban đầu của các
-công việc dưới đây là TODO, trừ FND-01 đang REVIEW trong thay đổi hiện tại.
-Người nhận việc ghi owner trong bản task dùng template; chưa có owner mặc định.
+Ngày lập: 2026-10-21. Cập nhật điều phối 2026-10-25. G0/G1/G2 đã nghiệm thu;
+SEC-01 DONE, G3 vẫn mở. Nền tảng hỗ trợ Windows, Python 3.12 baseline và
+3.14 trong CI sau kiểm chứng. Không mở Linux hoặc 3.10 trở lại matrix ngầm.
+Công việc tiếp theo: SEC-02 READY, chỉ giai đoạn A theo task được giao.
 
 ## Baseline và thứ tự
 
-Baseline là MVP được xuất bản cùng bộ khung; mỗi task ghi SHA thực tế lúc nhận.
-Có 8 integration tests
-dùng fake provider; chưa có live-provider test, crash-kill thật, kiểm chứng
-Windows Job Object, immutable vault hoặc sandbox OS.
+Baseline hiện tại: 233 offline tests trên Windows, giữ 8 pipeline regressions
+ban đầu. Python 3.12 là baseline; 3.14 compatibility CI được kiểm chứng riêng.
+Tests dùng fake provider, không có live-provider/credential thật mặc định.
+G2 đã kiểm lifecycle/lock/containment/recovery; SEC-01 chỉ chứng minh fixture
+AppContainer. Chưa có immutable vault hoặc sandbox Worker production; G3 mở.
 
 `G0 → G1 → G2 → G3 → G4 → G5 → G6`
 
@@ -19,7 +20,7 @@ không kích hoạt tính năng phụ thuộc khi gate trước chưa đạt.
 
 | Gate | Mục tiêu | Công việc và thứ tự | Điều kiện ra gate |
 | --- | --- | --- | --- |
-| G0 — nền phát triển | Quy trình dùng được trên máy mới | FND-01 quy chuẩn/CI/templates; FND-02 chuẩn hóa code và lỗi | Check local đạt; CI Windows/Linux Python 3.10/3.12 đạt; package cài được và entrypoint chạy từ ngoài repo; review scope |
+| G0 — nền phát triển | Quy trình dùng được trên máy mới | FND-01 quy chuẩn/CI/templates; FND-02 chuẩn hóa code và lỗi | Check local đạt; CI Windows Python 3.12/3.14 đạt; package cài được và entrypoint chạy từ ngoài repo; review scope |
 | G1 — hợp đồng dữ liệu | Không chạy từ state/task mơ hồ | DAT-01 schema; REC-01 chuyển trạng thái; REC-02 crash/recovery | Input hỏng bị từ chối trước side effect; schema lạ không bị ghi đè; crash matrix có kết quả và resume không commit trùng |
 | G2 — vòng đời tiến trình | Một run, một Worker thực sự | PROC-01 khóa liên tiến trình; PROC-02 containment Windows; PROC-03 lệnh phục hồi an toàn | Test hai OMP process; kill cha/timeout/Ctrl+C không để Worker tiếp tục ngoài kiểm soát; không cần sửa JSON thủ công |
 | G3 — cách ly kiểm thử | Bảo vệ kết quả và dữ liệu nguồn | SEC-01 threat model + thử nghiệm OS; SEC-02 validator/test runner; SEC-03 scope/Git tampering | Worker bị từ chối ghi vào vùng bảo vệ ở cấp quyền; test kết quả gắn đúng tree; phá hoại có test âm; review độc lập |
@@ -31,38 +32,38 @@ không kích hoạt tính năng phụ thuộc khi gate trước chưa đạt.
 
 ### G0
 
-- **FND-01 [REVIEW]** — AGENTS, contributing, contracts, ADR, task/handoff,
+- **FND-01 [DONE]** — AGENTS, contributing, contracts, ADR, task/handoff,
   check local và CI. Evidence: lệnh check/package smoke và CI URL khi có.
   CI chưa chạy trên server thì không ghi G0 DONE.
-- **FND-02 [TODO, sau FND-01]** — thêm type hints cho code hiện có; tách CLI,
+- **FND-02 [DONE]** — thêm type hints cho code hiện có; tách CLI,
   lỗi dữ liệu và lỗi thực thi; bỏ assert trong command runner mặc định;
   test phát hiện 0 tests vẫn fail dưới Python optimize. Không refactor hành
   vi cùng lúc. Phạm vi: main.py, tests, config/docs khi liên quan.
-  Gói giao việc hiện hành: [FND-02](tasks/FND-02.md), trạng thái READY.
+  Gói giao việc hiện hành: [FND-02](tasks/FND-02.md), trạng thái DONE.
 
 ### G1
 
-- **DAT-01** — validate top-level type, unknown fields, version, enum phase,
+- **DAT-01 [DONE]** — validate top-level type, unknown fields, version, enum phase,
   run_id, PID, số retry/budget, argv và đường dẫn trước mọi side effect;
   phân biệt missing/invalid/unsupported. Config/task/state đều versioned.
   Test JSON hỏng, list/null thay object, bool thay int, traversal và path Windows.
-- **REC-01** — bảng transition và invariants thực thi được. Ghi nhận kết quả
+- **REC-01 [DONE]** — bảng transition và invariants thực thi được. Ghi nhận kết quả
   test bằng exit code, tree identity và command identity; thay đổi tree/config
   làm mất hiệu lực kết quả cũ. Giải quyết no-op task tường minh.
-- **REC-02** — fault injection tại clone dở, checkout, spawn trước ghi PID,
+- **REC-02 [DONE]** — fault injection tại clone dở, checkout, spawn trước ghi PID,
   ghi PID, test đạt trước checkpoint, stage trước commit, commit trước state
   và state replace lỗi. Mỗi case có expected: tự resume, chặn an toàn hoặc
   cần recovery command. Không gọi "mất điện an toàn" chỉ từ mocked exception.
 
 ### G2
 
-- **PROC-01** — hai process tranh cùng lock: chỉ một process được spawn Worker;
+- **PROC-01 [DONE]** — hai process tranh cùng lock: chỉ một process được spawn Worker;
   test lock tự nhả khi owner bị kill và PID tái sử dụng không bị nhận nhầm.
-- **PROC-02** — thử Windows Job Object hoặc cơ chế OS tương đương; giải quyết
+- **PROC-02 [DONE]** — thử Windows Job Object hoặc cơ chế OS tương đương; giải quyết
   khoảng trống spawn/attach/checkpoint, con/cháu tách phiên và tiến trình cha
   chết. Timeout cleanup hữu hạn; lỗi cleanup giữ trạng thái cần điều tra.
   Không có bằng chứng kill descendants thì không chuyển provider.
-- **PROC-03** — `recover`/`abort` có đối soát và audit event, không hướng dẫn
+- **PROC-03 [DONE]** — `recover`/`abort` có đối soát và audit event, không hướng dẫn
   người dùng tùy ý xóa child_pid/đổi phase. Test owner đang sống, PID lạ,
   checkout dở và run đã xong. Không tự xóa chứng cứ hoặc sửa repo nguồn.
 
@@ -72,7 +73,7 @@ không kích hoạt tính năng phụ thuộc khi gate trước chưa đạt.
   quyền đọc/ghi, credentials, network, vùng runtime/vault và process model.
   Làm thử nghiệm nhỏ trước khi xây framework. Nếu chưa đạt thì chỉ công bố
   chế độ Worker hợp tác và chặn các tuyên bố bảo mật tương ứng.
-- **SEC-02** — test runner ngoài quyền Worker, inputs/config/import hooks
+- **SEC-02 [READY — giai đoạn A]** — [gói giao việc](tasks/SEC-02.md): test runner ngoài quyền Worker, inputs/config/import hooks
   được kiểm soát, manifest nằm ngoài quyền ghi. Test sửa test, conftest,
   sitecustomize, runner config, fake output/exit và kết quả cũ. Hash cạnh file
   không được nghiệm thu là immutable vault.
@@ -104,10 +105,10 @@ không kích hoạt tính năng phụ thuộc khi gate trước chưa đạt.
 
 ## Gói công việc tiếp theo
 
-1. Review FND-01 và chạy CI khi thay đổi được đưa lên remote theo quyền được cấp.
-2. FND-02: chuẩn code/lỗi và regression cho zero-tests; giữ 8 test baseline.
-3. DAT-01: schema và validation; sau đó REC-01, REC-02.
-4. Chỉ bắt đầu PROC-01 khi G1 có evidence đủ; không nhảy sang dashboard.
+1. Windows/Python 3.12 dùng ngay; matrix 3.12/3.14 được kiểm chứng riêng.
+2. SEC-02 giai đoạn A: proof Python và trusted runner inputs theo task; fake Worker.
+3. Chỉ sau review giai đoạn A mới chốt thiết kế/tích hợp SEC-02 giai đoạn B.
+4. SEC-03 và việc đóng G3 tiếp tục chờ; không mở PIPE/provider/UI trước gate.
 
 Mỗi công việc qua `TODO → IN_PROGRESS → REVIEW → DONE`; `BLOCKED` ghi dependency,
 lỗi và điều kiện gỡ chặn. Handoff không tự chuyển REVIEW thành DONE.
@@ -120,3 +121,9 @@ SEC-01 DONE tại merge `8afc0f750705a5b23e769d481106c28f89f9a9c7`;
 Chỉ nghiệm thu threat model và standalone AppContainer fixture proof; chưa
 cách ly Worker production. [Evidence merge](reviews/SEC-01-MERGE.md).
 G3 vẫn mở, còn SEC-02/SEC-03; không tự đóng gate hoặc mở task tiếp theo.
+
+## Chính sách nền tảng 2026-10-25
+
+Bỏ Linux khỏi CI và phạm vi hỗ trợ; Python tối thiểu 3.12, CI Windows 3.12/3.14.
+Bằng chứng lịch sử giữ nguyên; quyết định hiện hành tại ADR-0007. SEC-02 chỉ
+được làm giai đoạn A; G3 không tự đóng vì thay matrix hoặc SEC-01 DONE.

@@ -1,11 +1,13 @@
 # OMP — Open Multi-agent Pipeline
 
 MVP: một provider, một task, checkout riêng, kiểm thử và commit cục bộ.
-Python 3.10+, Git, không cần thư viện Python lúc chạy.
+Windows, Python 3.12 làm baseline, Git; không có dependency Python runtime.
+CI bắt buộc Windows/Python 3.12 và 3.14 sau kiểm chứng; Linux không còn được hỗ trợ.
 
 ## Sử dụng
 
 ```powershell
+python --version  # Baseline phát triển phải là 3.12.x
 python -m pip install -e .
 # Chuyển tới repo cần thực hiện task
 omp init
@@ -137,13 +139,18 @@ AI và người đóng góp đọc [AGENTS.md](AGENTS.md) trước khi sửa cod
 [Lộ trình](docs/ROADMAP.md) quy định thứ tự gate và acceptance;
 [quy trình đóng góp](docs/CONTRIBUTING.md) quy định review/kiểm chứng;
 [contracts](docs/CONTRACTS.md) xác định bất biến và khoảng trống hiện tại.
-Task và handoff dùng mẫu trong `docs/templates/`. CI kiểm tra Windows/Linux
-trên Python 3.10/3.12, không gọi AI thật hoặc tự publish.
+Task và handoff dùng mẫu trong `docs/templates/`. CI kiểm tra Windows
+trên Python 3.12/3.14, không gọi AI thật hoặc tự publish.
 
 [Quy trình điều phối/review AI](docs/COORDINATION.md) quy định quyền giao việc
 và nghiệm thu. FND-01/FND-02, G0, [DAT-01](docs/tasks/DAT-01.md) và
 [REC-01](docs/tasks/REC-01.md), [REC-02](docs/tasks/REC-02.md) đã nghiệm thu và tích hợp.
 G1 DONE theo [quyết định điều phối](docs/reviews/G1-CLOSURE.md); PROC-01 và
-PROC-02 đã merge/nghiệm thu. [PROC-03](docs/tasks/PROC-03.md) đang REVIEW,
-G2 vẫn mở. [SEC-01](docs/tasks/SEC-01.md) đã DONE ([evidence merge](docs/reviews/SEC-01-MERGE.md)); G3 vẫn mở. AI thực thi bàn giao để reviewer nghiệm thu, không tự push main
+PROC-02/PROC-03 đã merge/nghiệm thu; G2 đã đóng. [SEC-01](docs/tasks/SEC-01.md) đã DONE ([evidence merge](docs/reviews/SEC-01-MERGE.md)); G3 vẫn mở. AI thực thi bàn giao để reviewer nghiệm thu, không tự push main
 hoặc nhận tiếp task khác.
+
+## Công việc tiếp theo
+
+[SEC-02](docs/tasks/SEC-02.md) READY, chỉ giai đoạn A: proof Python và trusted
+runner inputs trên Windows 3.12/3.14. Chưa triển khai production boundary.
+G3 còn mở; không tuyên bố AppContainer đã bảo vệ tài sản thật.
