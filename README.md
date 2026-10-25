@@ -112,6 +112,11 @@ có thể fetch commit từ clone rồi cherry-pick thủ công.
   chế quyền file/network/credential. Cùng tài khoản OS vẫn có thể truy cập repo
   nguồn, runtime, Git metadata, file ignored và môi trường ngoài repo. Kiểm tra
   whitelist sau thực thi phát hiện sai lệch, không ngăn tác động trước đó.
+- SEC-01 đã chứng minh trên fixture rằng AppContainer/lowbox bị OS từ chối
+  đọc/ghi canary, nhưng **chưa tích hợp** vào runner và chưa bảo vệ tài sản
+  thật. Xem [threat model](docs/security/THREAT-MODEL.md) và
+  [ADR-0006](docs/decisions/0006-windows-isolation.md); network, credential,
+  handle và Worker CLI thật vẫn NOT PROVEN.
 - Chưa có immutable vault hoặc test runner cách ly. Không dùng cho Worker
   đối kháng hoặc DB production. Không có migration, cài package tự động,
   submodule/LFS, dashboard hoặc push. Không lưu secrets trong Git.
@@ -140,5 +145,5 @@ và nghiệm thu. FND-01/FND-02, G0, [DAT-01](docs/tasks/DAT-01.md) và
 [REC-01](docs/tasks/REC-01.md), [REC-02](docs/tasks/REC-02.md) đã nghiệm thu và tích hợp.
 G1 DONE theo [quyết định điều phối](docs/reviews/G1-CLOSURE.md); PROC-01 và
 PROC-02 đã merge/nghiệm thu. [PROC-03](docs/tasks/PROC-03.md) đang REVIEW,
-G2 vẫn mở. AI thực thi bàn giao để reviewer nghiệm thu, không tự push main
+G2 vẫn mở. [SEC-01](docs/tasks/SEC-01.md) đang REVIEW, chưa DONE; G3 vẫn mở. AI thực thi bàn giao để reviewer nghiệm thu, không tự push main
 hoặc nhận tiếp task khác.
