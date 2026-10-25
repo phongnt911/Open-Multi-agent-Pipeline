@@ -145,5 +145,5 @@ và nghiệm thu. FND-01/FND-02, G0, [DAT-01](docs/tasks/DAT-01.md) và
 [REC-01](docs/tasks/REC-01.md), [REC-02](docs/tasks/REC-02.md) đã nghiệm thu và tích hợp.
 G1 DONE theo [quyết định điều phối](docs/reviews/G1-CLOSURE.md); PROC-01 và
 PROC-02 đã merge/nghiệm thu. [PROC-03](docs/tasks/PROC-03.md) đang REVIEW,
-G2 vẫn mở. [SEC-01](docs/tasks/SEC-01.md) đang REVIEW, chưa DONE; G3 vẫn mở. AI thực thi bàn giao để reviewer nghiệm thu, không tự push main
+G2 vẫn mở. [SEC-01](docs/tasks/SEC-01.md) đã DONE ([evidence merge](docs/reviews/SEC-01-MERGE.md)); G3 vẫn mở. AI thực thi bàn giao để reviewer nghiệm thu, không tự push main
 hoặc nhận tiếp task khác.

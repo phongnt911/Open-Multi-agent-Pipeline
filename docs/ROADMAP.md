@@ -68,7 +68,7 @@ không kích hoạt tính năng phụ thuộc khi gate trước chưa đạt.
 
 ### G3
 
-- **SEC-01** — ADR quyết định cơ chế cách ly khả thi trên Windows: principal,
+- **SEC-01 [DONE]** — ADR quyết định cơ chế cách ly khả thi trên Windows: principal,
   quyền đọc/ghi, credentials, network, vùng runtime/vault và process model.
   Làm thử nghiệm nhỏ trước khi xây framework. Nếu chưa đạt thì chỉ công bố
   chế độ Worker hợp tác và chặn các tuyên bố bảo mật tương ứng.
@@ -111,3 +111,12 @@ không kích hoạt tính năng phụ thuộc khi gate trước chưa đạt.
 
 Mỗi công việc qua `TODO → IN_PROGRESS → REVIEW → DONE`; `BLOCKED` ghi dependency,
 lỗi và điều kiện gỡ chặn. Handoff không tự chuyển REVIEW thành DONE.
+
+## Quyết định điều phối 2026-10-25 sau SEC-01
+
+SEC-01 DONE tại merge `8afc0f750705a5b23e769d481106c28f89f9a9c7`;
+[CI main 40154052968](https://github.com/phongnt911/Open-Multi-agent-Pipeline/actions/runs/40154052968)
+4/4 success (Windows/Linux x Python 3.10/3.12), package smoke đạt.
+Chỉ nghiệm thu threat model và standalone AppContainer fixture proof; chưa
+cách ly Worker production. [Evidence merge](reviews/SEC-01-MERGE.md).
+G3 vẫn mở, còn SEC-02/SEC-03; không tự đóng gate hoặc mở task tiếp theo.
