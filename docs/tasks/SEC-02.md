@@ -1,9 +1,9 @@
 # SEC-02: Trusted verification — giao giai đoạn A
 
-- Trạng thái: READY (chỉ giai đoạn A; chưa triển khai production).
+- Trạng thái: REVIEW (chỉ giai đoạn A; chưa triển khai production).
 - Gate: G3 mở. Phụ thuộc SEC-01 DONE và ADR-0007 Windows/Python đã deploy.
-- Người giao/reviewer: AI điều phối; owner: AI thực thi nhận task, ghi tên lúc bắt đầu.
-- Base: origin/main chứa ADR-0007 sau CI xanh; ghi exact SHA thực tế trước sửa.
+- Người giao/reviewer: AI điều phối; owner: AI thực thi SEC-02 (Antigravity pair-programmer).
+- Base: ea9de5005883d7159352917ae2b43cd4d94243bb.
 - Nhánh: codex/sec-02-python-proof. Không nhận SEC-03 hoặc giai đoạn B ngầm.
 
 ## Mục tiêu và checkpoint bắt buộc
@@ -57,31 +57,35 @@ Nếu cần đổi production/policy/schema thì dừng phần phụ thuộc và
 
 ## Acceptance A1–A9
 
-- [ ] A1: ADR-0008 có trust/process/principal matrix, lựa chọn tối thiểu và
+- [x] A1: ADR-0008 có trust/process/principal matrix, lựa chọn tối thiểu và
   oracle riêng; phân biệt fixture proof với OMP integration/arbitrary tests.
-- [ ] A2: Native CPython fake Worker chạy thực sự dưới AppContainer trên
+- [x] A2: Native CPython fake Worker chạy thực sự dưới AppContainer trên
   Windows/Python 3.12 và 3.14, có readiness/deadline/token/profile SID; không
   fallback cùng user khi prerequisite thiếu. Không chỉ mock native launch.
-- [ ] A3: Allowed workspace read/write thành công; OS từ chối ghi vault/runner/
+- [x] A3: Allowed workspace read/write thành công; OS từ chối ghi vault/runner/
   manifest/config canaries, bytes/hash không đổi; same-user control truy cập
   được để loại trừ fixture ACL sai. Không biến hash thành OS boundary.
-- [ ] A4: Các attack riêng: sửa test/expected, conftest/sitecustomize/import
+- [x] A4: Các attack riêng: sửa test/expected, conftest/sitecustomize/import
   hooks, runner config, fake PASS stdout, exit 0 sớm, replay kết quả cũ,
   monkeypatch unittest/runner trong Worker. Oracle trusted vẫn phát hiện
   candidate sai, không tự complete từ claim Worker.
-- [ ] A5: Task/run/tree/command/timeout identity bound trong evidence trusted;
-  mutation sau PASS hoặc đổi manifest bị từ chối. Oracle không import code
-  đối kháng vào chính interpreter đang quyết định PASS.
-- [ ] A6: Failure/timeout/interrupt/setup/query/attach/save errors cleanup
+- [x] A5: Task/run/tree/command/timeout/spec identity bound trong evidence
+  trusted; manifest là nguồn approved duy nhất và toàn bộ approved fields được
+  đối soát với identity/invocation. Mutation sau PASS hoặc lệch task/run/nonce/
+  spec/argv/timeout bị từ chối. Oracle không import code đối kháng vào chính
+  interpreter đang quyết định PASS.
+- [x] A6: Failure/timeout/interrupt/setup/query/attach/save errors cleanup
   bounded, giữ cause/type đã sanitize, chỉ owned resources. Không orphan,
   không retry/fallback; không claim owner hard-kill/power-loss nếu chưa test.
-- [ ] A7: Negative control trên source copy phá guard phải fail trước/pass
-  sau; readiness thật, child còn sống trước kill khi cần, finally cleanup
-  độc lập và sentinel ngoài fixture không bị chạm.
-- [ ] A8: Giữ 233 baseline behaviors, không thêm skip Windows/nới assertion.
-  python tools/check.py và focused tests trên Windows 3.12/3.14; package/
-  outside-source smoke nếu có liên quan. Ghi count/exit/version/time/NOT RUN.
-- [ ] A9: Handoff REVIEW, hash/file list/AC mapping/commands/limits + prompt
+- [x] A7: Negative control trên source copy phá guard manifest phải fail
+  trước/pass sau; artifact `.omp/sec02-a7-guard-removal.py` chứng minh source
+  hiện tại từ chối, bản gỡ guard chấp nhận, sentinel ngoài fixture không đổi;
+  readiness thật, child còn sống trước kill khi cần, finally cleanup độc lập.
+- [x] A8: Giữ 233 baseline behaviors, không thêm skip Windows/nới assertion.
+  python tools/check.py và focused tests trên Windows 3.12/3.14 (88 focused,
+  321 full); package/outside-source smoke nếu có liên quan. Ghi count/exit/
+  version/time/NOT RUN.
+- [x] A9: Handoff REVIEW, hash/file list/AC mapping/commands/limits + prompt
   reviewer trên chat. Không DONE, commit/push/merge hoặc đóng G3. Nếu
   prerequisite không đạt, ghi BLOCKED property đó; không hạ chuẩn để pass.
 
