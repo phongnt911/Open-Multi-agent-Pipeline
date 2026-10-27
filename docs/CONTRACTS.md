@@ -122,6 +122,49 @@ checkpoint schema.
 - Không dùng AppContainer trong production cho đến khi runner tích hợp, có
   negative proof cho tài sản/network thật và review độc lập security gate.
 
+## AppContainer primitive trong Job runner (SEC-02-B1a REVIEW)
+
+- B1a chỉ thêm primitive vào `omp_core/windows_job.py`; `main.py`/CLI/schema
+  không gọi API mới và legacy `app_container=None` giữ nguyên hai attribute,
+  `env=None` và hành vi Worker cũ. Chưa phải activation production.
+- `WindowsAppContainerProfile.create(name)` tạo profile mới và sở hữu SID +
+  folder; tên trùng bị từ chối, không adopt/delete profile lạ. Native return và
+  owner construction nằm trong guard: interrupt/`SystemExit` sau khi Windows đã
+  cấp profile vẫn giải phóng SID + profile; out SID khác 0 là bằng chứng sở hữu,
+  còn HRESULT collision không bao giờ xoá profile lạ. Lỗi cleanup được ghi note
+  nhưng giữ nguyên type exception gốc. Thuộc tính `name`/`sid`/`folder`/`closed`
+  là typed; `close()` chỉ giải phóng tài nguyên object này tạo, idempotent sau
+  thành công, từ chối khi cây process bound còn sống/không xác minh được, khi
+  SID đã mất quyền sở hữu hoặc start trước đó chưa chứng minh cleanup; giữ
+  `closed=False` nếu FreeSid/HRESULT lỗi. Binding process chỉ được gỡ sau khi
+  FreeSid và delete profile thành công.
+- `WindowsJobProcess.start(..., app_container=<profile>)` yêu cầu `env` mapping
+  text tường minh (key rỗng, `=`, NUL, value sai kiểu bị từ chối trước mọi side
+  effect), profile mở/chưa bind và còn SID dùng được. `CreateProcessW` nhận ba
+  attribute: job list, stdin/log handle allowlist, `SECURITY_CAPABILITIES` zero
+  capability; child suspended, token được đọc lại và phải cùng user, đúng
+  AppContainer SID, low integrity, 0 capability trước khi start trả về. Caller
+  vẫn tự save PID rồi `resume`. Nếu start fail sau khi đã tạo process, cleanup
+  terminate process + job, wait bounded tới job rỗng, đóng handle và kiểm kết
+  quả unlink stdin; bước nào không chứng minh được sẽ poison profile (chặn
+  replacement start và close) thay vì retry/fallback. Chỉ cleanup đầy đủ mới
+  cho profile dùng lại.
+- Một profile chỉ bind một cây tại một thời điểm: cây live/unknown chặn start
+  kế tiếp và chặn `profile.close()`; sequential reuse chỉ sau `tree_stopped`.
+  `WindowsJobProcess.close()` kiểm tra kết quả `CloseHandle` và unlink stdin,
+  giữ failure sticky và giữ binding profile nếu bất kỳ bước nào lỗi; chỉ gỡ
+  binding sau khi mọi bước thành công. `KeyboardInterrupt`/`SystemExit` tại
+  `CloseHandle` được giữ đúng type: phần cleanup còn lại vẫn chạy best-effort,
+  lỗi kèm theo ghi note đã sanitize, handle không rõ trạng thái không bị đóng
+  lần hai và failure vẫn sticky. Không fallback Popen/same-user; lỗi native
+  giữ stage + cause đã sanitize.
+- Giới hạn B1a: chưa chứng minh network/credential/handle isolation, chưa tích
+  hợp orchestrator, chưa có layout/env/approved manifest (B1b) hoặc recovery
+  (B1c). AppContainer cần Windows 10/Server 2016+ và controller medium
+  integrity; runtime 3.14 local mang nhãn Low phải chạy từ bản copy Medium.
+  Fixture native chỉ dùng runtime/workspace/profile/canary tạm, không claim tài
+  sản repo/vault thật.
+
 ## Ranh giới module mục tiêu
 
 | Trách nhiệm | Đầu vào/đầu ra | Quyền side effect |
