@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import ctypes
 from ctypes import wintypes
+from collections.abc import Mapping as _MappingABC
 import os
 from pathlib import Path
 import subprocess
@@ -51,6 +52,16 @@ _WAIT_FAILED = 0xFFFFFFFF
 _INFINITE = 0xFFFFFFFF
 _ERROR_INSUFFICIENT_BUFFER = 122
 _DEFAULT_CLEANUP_SECONDS = 10.0
+_PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES = 0x00020009
+_TOKEN_QUERY = 0x0008
+_TOKEN_USER = 1
+_TOKEN_INTEGRITY_LEVEL = 25
+_TOKEN_IS_APP_CONTAINER = 29
+_TOKEN_CAPABILITIES = 30
+_TOKEN_APPCONTAINER_SID = 31
+_ERROR_ALREADY_EXISTS = 183
+_LOW_INTEGRITY_SID = "S-1-16-4096"
+_APP_CONTAINER_OWNER = object()
 
 
 class _LARGE_INTEGER(ctypes.Union):
@@ -149,6 +160,22 @@ class _PROCESS_INFORMATION(ctypes.Structure):
     ]
 
 
+class _SID_AND_ATTRIBUTES(ctypes.Structure):
+    _fields_ = [
+        ("Sid", ctypes.c_void_p),
+        ("Attributes", wintypes.DWORD),
+    ]
+
+
+class _SECURITY_CAPABILITIES(ctypes.Structure):
+    _fields_ = [
+        ("AppContainerSid", ctypes.c_void_p),
+        ("Capabilities", ctypes.POINTER(_SID_AND_ATTRIBUTES)),
+        ("CapabilityCount", wintypes.DWORD),
+        ("Reserved", wintypes.DWORD),
+    ]
+
+
 def _kernel32() -> ctypes.WinDLL:
     """Return the configured Kernel32 API table.
 
@@ -209,6 +236,62 @@ def _kernel32() -> ctypes.WinDLL:
     api.SetHandleInformation.restype = wintypes.BOOL
     api.CloseHandle.argtypes = [wintypes.HANDLE]
     api.CloseHandle.restype = wintypes.BOOL
+    api.GetCurrentProcess.argtypes = []
+    api.GetCurrentProcess.restype = wintypes.HANDLE
+    api.LocalFree.argtypes = [wintypes.HLOCAL]
+    api.LocalFree.restype = wintypes.HLOCAL
+    return api
+
+
+def _advapi32() -> ctypes.WinDLL:
+    """Return the configured Advapi32 API table for token and SID calls."""
+    if os.name != "nt":
+        raise WindowsJobError("Windows token queries require Windows")
+    api = ctypes.WinDLL("advapi32", use_last_error=True)
+    api.OpenProcessToken.argtypes = [
+        wintypes.HANDLE, wintypes.DWORD, ctypes.POINTER(wintypes.HANDLE),
+    ]
+    api.OpenProcessToken.restype = wintypes.BOOL
+    api.GetTokenInformation.argtypes = [
+        wintypes.HANDLE, ctypes.c_int, wintypes.LPVOID, wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+    ]
+    api.GetTokenInformation.restype = wintypes.BOOL
+    api.ConvertSidToStringSidW.argtypes = [
+        ctypes.c_void_p, ctypes.POINTER(wintypes.LPWSTR),
+    ]
+    api.ConvertSidToStringSidW.restype = wintypes.BOOL
+    api.FreeSid.argtypes = [ctypes.c_void_p]
+    api.FreeSid.restype = ctypes.c_void_p
+    return api
+
+
+def _userenv() -> ctypes.WinDLL:
+    """Return the configured Userenv API table for AppContainer profiles."""
+    if os.name != "nt":
+        raise WindowsJobError("Windows AppContainer profiles require Windows")
+    api = ctypes.WinDLL("userenv", use_last_error=True)
+    api.CreateAppContainerProfile.argtypes = [
+        wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPCWSTR, wintypes.LPVOID,
+        wintypes.DWORD, ctypes.POINTER(ctypes.c_void_p),
+    ]
+    api.CreateAppContainerProfile.restype = ctypes.c_long
+    api.DeleteAppContainerProfile.argtypes = [wintypes.LPCWSTR]
+    api.DeleteAppContainerProfile.restype = ctypes.c_long
+    api.GetAppContainerFolderPath.argtypes = [
+        wintypes.LPCWSTR, ctypes.POINTER(wintypes.LPWSTR),
+    ]
+    api.GetAppContainerFolderPath.restype = ctypes.c_long
+    return api
+
+
+def _ole32() -> ctypes.WinDLL:
+    """Return the configured Ole32 API table for task-memory free."""
+    if os.name != "nt":
+        raise WindowsJobError("Windows task-memory free requires Windows")
+    api = ctypes.WinDLL("ole32", use_last_error=True)
+    api.CoTaskMemFree.argtypes = [ctypes.c_void_p]
+    api.CoTaskMemFree.restype = None
     return api
 
 
@@ -219,6 +302,292 @@ def _check(ok: object, stage: str) -> None:
     code = ctypes.get_last_error()
     detail = ctypes.FormatError(code).strip()
     raise WindowsJobError(f"{stage} failed (WinError {code}: {detail})")
+
+
+def _sid_string(advapi: ctypes.WinDLL, sid: int) -> str:
+    """Return the string form of *sid*, freeing the Win32-owned buffer."""
+    kernel32 = _kernel32()
+    out = wintypes.LPWSTR()
+    _check(
+        advapi.ConvertSidToStringSidW(ctypes.c_void_p(sid), ctypes.byref(out)),
+        "convert AppContainer SID to string",
+    )
+    if not out.value:
+        raise WindowsJobError("convert AppContainer SID to string was empty")
+    value = out.value
+    if kernel32.LocalFree(out):
+        raise WindowsJobError("free AppContainer SID string failed")
+    return value
+
+
+def _app_container_folder(userenv: ctypes.WinDLL, sid: str) -> Path:
+    """Return the profile folder reported by Userenv for *sid*."""
+    out = wintypes.LPWSTR()
+    result = int(userenv.GetAppContainerFolderPath(sid, ctypes.byref(out)))
+    if result != 0:
+        raise WindowsJobError(
+            "read AppContainer profile folder failed "
+            f"(HRESULT 0x{result & 0xFFFFFFFF:08x})"
+        )
+    try:
+        value = out.value or ""
+    finally:
+        _ole32().CoTaskMemFree(out)
+    if not value:
+        raise WindowsJobError("AppContainer profile folder was empty")
+    return Path(value)
+
+
+def _free_sid(advapi: ctypes.WinDLL, sid: int) -> None:
+    """Free one owned SID; ``FreeSid`` returns NULL on success."""
+    if advapi.FreeSid(ctypes.c_void_p(sid)):
+        raise WindowsJobError("free AppContainer SID failed")
+
+
+def _delete_profile(userenv: ctypes.WinDLL, name: str) -> None:
+    """Delete one owned profile and raise on a non-zero HRESULT."""
+    result = int(userenv.DeleteAppContainerProfile(name))
+    if result != 0:
+        raise WindowsJobError(
+            "delete AppContainer profile failed "
+            f"(HRESULT 0x{result & 0xFFFFFFFF:08x})"
+        )
+
+
+def _validate_environment(env: Mapping[str, str]) -> None:
+    """Reject an environment mapping that Windows cannot pass verbatim.
+
+    Raises:
+        ValueError: the value is not a text-to-text mapping or contains an
+            empty key, ``=`` in a key, or a NUL in a key or value.
+    """
+    if not isinstance(env, _MappingABC):
+        raise ValueError("env must be a mapping of text keys to text values")
+    for key, value in env.items():
+        if not isinstance(key, str) or not isinstance(value, str):
+            raise ValueError("env keys and values must be text")
+        if not key:
+            raise ValueError("env keys must not be empty")
+        drive_key = (
+            len(key) == 3 and key[0] == "=" and key[2] == ":" and key[1].isalpha()
+        )
+        if "=" in key and not drive_key:
+            raise ValueError("env keys must not contain '='")
+        if "\0" in key or "\0" in value:
+            raise ValueError("env keys and values must not contain NUL")
+
+
+def _token_buffer(
+    advapi: ctypes.WinDLL, token: wintypes.HANDLE, information_class: int
+) -> ctypes.Array[ctypes.c_char]:
+    """Return one sized token-information buffer."""
+    size = wintypes.DWORD()
+    advapi.GetTokenInformation(
+        token, information_class, None, 0, ctypes.byref(size)
+    )
+    if size.value == 0:
+        _check(False, f"size token information {information_class}")
+    if size.value > 1024 * 1024:
+        raise WindowsJobError(
+            f"token information {information_class} is unreasonably large"
+        )
+    data = ctypes.create_string_buffer(size.value)
+    returned = wintypes.DWORD()
+    _check(
+        advapi.GetTokenInformation(
+            token, information_class, data, size, ctypes.byref(returned)
+        ),
+        f"query token information {information_class}",
+    )
+    return data
+
+
+def _token_sid(
+    advapi: ctypes.WinDLL, token: wintypes.HANDLE, information_class: int
+) -> str:
+    """Return the string SID carried by one token-information class."""
+    blob = _token_buffer(advapi, token, information_class)
+    record = ctypes.cast(blob, ctypes.POINTER(_SID_AND_ATTRIBUTES)).contents
+    if not record.Sid:
+        raise WindowsJobError(
+            f"token information {information_class} carries no SID"
+        )
+    return _sid_string(advapi, int(record.Sid))
+
+
+def _token_capability_count(
+    advapi: ctypes.WinDLL, token: wintypes.HANDLE
+) -> int:
+    """Return the number of AppContainer capabilities in *token*."""
+    blob = _token_buffer(advapi, token, _TOKEN_CAPABILITIES)
+    return int(ctypes.cast(blob, ctypes.POINTER(wintypes.DWORD)).contents.value)
+
+
+def _open_process_token(
+    advapi: ctypes.WinDLL, process: wintypes.HANDLE
+) -> wintypes.HANDLE:
+    """Open a query-only token for *process*."""
+    token = wintypes.HANDLE()
+    _check(
+        advapi.OpenProcessToken(
+            process, _TOKEN_QUERY, ctypes.byref(token)
+        ),
+        "open contained process token",
+    )
+    return token
+
+
+def _current_user_sid(api: ctypes.WinDLL, advapi: ctypes.WinDLL) -> str:
+    """Return the current process user SID as text."""
+    token = _open_process_token(advapi, api.GetCurrentProcess())
+    try:
+        return _token_sid(advapi, token, _TOKEN_USER)
+    finally:
+        api.CloseHandle(token)
+
+
+def _verify_container_token(
+    api: ctypes.WinDLL,
+    advapi: ctypes.WinDLL,
+    process: wintypes.HANDLE,
+    profile: "WindowsAppContainerProfile",
+    expected_user_sid: str,
+) -> None:
+    """Verify the suspended child token before the caller may resume it.
+
+    Raises:
+        WindowsJobError: any token query failed or the token is not the same
+            user inside the expected low-integrity zero-capability container.
+    """
+    token = _open_process_token(advapi, process)
+    try:
+        is_container = wintypes.DWORD()
+        returned = wintypes.DWORD()
+        _check(
+            advapi.GetTokenInformation(
+                token,
+                _TOKEN_IS_APP_CONTAINER,
+                ctypes.byref(is_container),
+                ctypes.sizeof(is_container),
+                ctypes.byref(returned),
+            ),
+            "query AppContainer token flag",
+        )
+        if not is_container.value:
+            raise WindowsJobError(
+                "contained process token is not an AppContainer"
+            )
+        if _token_sid(advapi, token, _TOKEN_APPCONTAINER_SID) != profile.sid:
+            raise WindowsJobError(
+                "contained process AppContainer SID does not match the profile"
+            )
+        if _token_sid(advapi, token, _TOKEN_INTEGRITY_LEVEL) != _LOW_INTEGRITY_SID:
+            raise WindowsJobError(
+                "contained process is not at low mandatory integrity"
+            )
+        if _token_capability_count(advapi, token) != 0:
+            raise WindowsJobError(
+                "contained process has AppContainer capabilities"
+            )
+        if _token_sid(advapi, token, _TOKEN_USER) != expected_user_sid:
+            raise WindowsJobError(
+                "contained process runs as a different user"
+            )
+    except BaseException:
+        api.CloseHandle(token)
+        raise
+    if not api.CloseHandle(token):
+        _check(False, "close contained process token")
+
+
+def _release_partial_process_information(
+    api: ctypes.WinDLL, info: _PROCESS_INFORMATION
+) -> list[str]:
+    """Release handles a ``CreateProcessW`` call returned before it raised.
+
+    The ownership guard runs before the raw ``PROCESS_INFORMATION`` is copied
+    into a managed object, so an interrupt at the native return cannot leak a
+    suspended child or its thread handle.  Returns every cleanup step that
+    could not be positively completed.
+    """
+    problems: list[str] = []
+    if info.hProcess:
+        try:
+            if not api.TerminateProcess(info.hProcess, 1):
+                problems.append("terminate failed")
+        except BaseException:
+            problems.append("terminate failed")
+        try:
+            if api.WaitForSingleObject(info.hProcess, 5000) != _WAIT_OBJECT_0:
+                problems.append("wait failed")
+        except BaseException:
+            problems.append("wait failed")
+        try:
+            if not api.CloseHandle(info.hProcess):
+                problems.append("close process failed")
+        except BaseException:
+            problems.append("close process failed")
+        info.hProcess = wintypes.HANDLE(0)
+    if info.hThread:
+        try:
+            if not api.CloseHandle(info.hThread):
+                problems.append("close thread failed")
+        except BaseException:
+            problems.append("close thread failed")
+        info.hThread = wintypes.HANDLE(0)
+    return problems
+
+
+def _wait_job_empty(
+    api: ctypes.WinDLL, job: wintypes.HANDLE, timeout: float
+) -> tuple[bool, int]:
+    """Wait boundedly until *job* reports no active processes."""
+    deadline = time.monotonic() + max(timeout, 0)
+    while True:
+        active = _active_processes(api, job)
+        if active == 0:
+            return True, 0
+        if time.monotonic() >= deadline:
+            return False, active
+        time.sleep(0.01)
+
+
+def _stop_started_process(
+    api: ctypes.WinDLL,
+    process: wintypes.HANDLE | None,
+    job: wintypes.HANDLE | None,
+    timeout: float,
+) -> list[str]:
+    """Stop a failed start tree and report every unproven cleanup step."""
+    problems: list[str] = []
+    if process is not None:
+        try:
+            if not api.TerminateProcess(process, 1):
+                problems.append("terminate failed")
+        except BaseException:
+            problems.append("terminate failed")
+        try:
+            if api.WaitForSingleObject(process, 5000) != _WAIT_OBJECT_0:
+                problems.append("wait failed")
+        except BaseException:
+            problems.append("wait failed")
+    if job is not None:
+        terminated = False
+        if process is not None:
+            try:
+                terminated = bool(api.TerminateJobObject(job, 1))
+            except BaseException:
+                terminated = False
+        try:
+            empty, active = _wait_job_empty(api, job, timeout)
+        except BaseException:
+            problems.append("job query failed")
+        else:
+            if not empty:
+                if not terminated:
+                    problems.append("terminate job failed")
+                problems.append(f"job not empty ({active} active)")
+    return problems
 
 
 def _active_processes(api: ctypes.WinDLL, job: wintypes.HANDLE) -> int:
@@ -276,23 +645,24 @@ def _write_all(fd: int, data: bytes) -> None:
         view = view[written:]
 
 
-def _unlink_with_retry(path: Path, attempts: int = 50) -> None:
+def _unlink_with_retry(path: Path, attempts: int = 50) -> bool:
     """Delete a private stdin file after child handles close.
 
     Windows can report a sharing violation briefly after the last job process
-    exits.  The retry is bounded and best effort; a leftover file stays under
-    the run directory and is never committed.
+    exits.  The retry is bounded and reports whether the file is gone; a
+    leftover file stays under the run directory and is never committed.
     """
     for attempt in range(attempts):
         try:
             path.unlink()
-            return
+            return True
         except FileNotFoundError:
-            return
+            return True
         except OSError:
             if attempt == attempts - 1:
-                return
+                return False
             time.sleep(0.01)
+    return False
 
 
 def _inheritable_handle(fd: int) -> int:
@@ -310,24 +680,50 @@ def _inheritable_handle(fd: int) -> int:
 
 
 def _attribute_list(api: ctypes.WinDLL, job: wintypes.HANDLE,
-                    handles: Sequence[int]) -> tuple[object, object, object]:
-    """Build a two-attribute list and return its live backing objects.
+                    handles: Sequence[int],
+                    container_sid: int | None = None
+                    ) -> tuple[object, ...]:
+    """Build the process attribute list and return its live backing objects.
 
-    The returned tuple must stay alive until ``CreateProcessW`` returns.
+    The legacy path uses exactly two attributes (job and handle lists).  The
+    AppContainer path adds ``SECURITY_CAPABILITIES`` with zero capabilities and
+    the profile SID.  The returned tuple must stay alive until
+    ``CreateProcessW`` returns.
     """
+    count = 2 if container_sid is None else 3
     size = ctypes.c_size_t()
-    api.InitializeProcThreadAttributeList(None, 2, 0, ctypes.byref(size))
+    api.InitializeProcThreadAttributeList(None, count, 0, ctypes.byref(size))
     if ctypes.get_last_error() != _ERROR_INSUFFICIENT_BUFFER:
         _check(False, "size process attribute list")
     buffer = ctypes.create_string_buffer(size.value)
     pointer = ctypes.cast(buffer, wintypes.LPVOID)
     _check(
-        api.InitializeProcThreadAttributeList(pointer, 2, 0, ctypes.byref(size)),
+        api.InitializeProcThreadAttributeList(
+            pointer, count, 0, ctypes.byref(size)
+        ),
         "initialize process attribute list",
     )
     job_handles = (wintypes.HANDLE * 1)(job)
     handle_array = (wintypes.HANDLE * len(handles))(*handles)
+    keepalive: list[object] = [buffer, job_handles, handle_array]
     try:
+        if container_sid is not None:
+            capabilities = _SECURITY_CAPABILITIES(
+                ctypes.c_void_p(container_sid), None, 0, 0
+            )
+            keepalive.append(capabilities)
+            _check(
+                api.UpdateProcThreadAttribute(
+                    pointer,
+                    0,
+                    _PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+                    ctypes.byref(capabilities),
+                    ctypes.sizeof(capabilities),
+                    None,
+                    None,
+                ),
+                "attach security capabilities attribute",
+            )
         _check(
             api.UpdateProcThreadAttribute(
                 pointer,
@@ -355,7 +751,217 @@ def _attribute_list(api: ctypes.WinDLL, job: wintypes.HANDLE,
     except BaseException:
         api.DeleteProcThreadAttributeList(pointer)
         raise
-    return buffer, job_handles, handle_array
+    return tuple(keepalive)
+
+
+def _discard_partial_profile(
+    userenv: ctypes.WinDLL,
+    advapi: ctypes.WinDLL,
+    pointer: int,
+    name: str,
+    exc: BaseException,
+    *,
+    delete: bool,
+) -> None:
+    """Release profile resources owned by a failed create, preserving *exc*."""
+    notes: list[str] = []
+    if pointer:
+        try:
+            _free_sid(advapi, pointer)
+        except BaseException:
+            notes.append("SID release failed")
+    if delete:
+        try:
+            _delete_profile(userenv, name)
+        except BaseException:
+            notes.append("profile deletion failed")
+    if notes and hasattr(exc, "add_note"):
+        exc.add_note("partial profile cleanup: " + "; ".join(notes))
+
+
+class WindowsAppContainerProfile:
+    """Own one AppContainer profile, its SID allocation, and its folder.
+
+    Create it with :meth:`create`; the object is the only supported source of
+    an AppContainer SID for :meth:`WindowsJobProcess.start`.  :meth:`close`
+    releases only resources this object created and refuses while a bound
+    process tree is live or unverified.
+    """
+
+    def __init__(
+        self,
+        *,
+        name: str,
+        sid: str,
+        folder: Path,
+        sid_pointer: int,
+        userenv: ctypes.WinDLL,
+        advapi: ctypes.WinDLL,
+        owner: object,
+    ) -> None:
+        if owner is not _APP_CONTAINER_OWNER:
+            raise WindowsJobError(
+                "AppContainer profiles must be created with create()"
+            )
+        self._owner_token = owner
+        self._name = name
+        self._sid = sid
+        self._folder = folder
+        self._sid_pointer: int | None = sid_pointer
+        self._sid_release_failed = False
+        self._failed_start: str | None = None
+        self._userenv = userenv
+        self._advapi = advapi
+        self._closed = False
+        self._bound: WindowsJobProcess | None = None
+
+    @classmethod
+    def create(cls, name: str) -> "WindowsAppContainerProfile":
+        """Create and own a new AppContainer profile named *name*.
+
+        An existing profile with the same name is never adopted or deleted.
+
+        Raises:
+            ValueError: *name* is not a non-empty string without NUL.
+            WindowsJobError: profile or SID allocation, SID conversion, or
+                folder lookup failed; partially created profile resources are
+                released before the error is re-raised.
+        """
+        if os.name != "nt":
+            raise WindowsJobError(
+                "Windows AppContainer profiles require Windows"
+            )
+        if not isinstance(name, str) or not name:
+            raise ValueError("profile name must be a non-empty string")
+        if "\0" in name:
+            raise ValueError("profile name must not contain NUL")
+        userenv = _userenv()
+        advapi = _advapi32()
+        sid_pointer = ctypes.c_void_p()
+        try:
+            result = int(
+                userenv.CreateAppContainerProfile(
+                    name, name, name, None, 0, ctypes.byref(sid_pointer)
+                )
+            )
+        except BaseException as exc:
+            # A non-zero out pointer is the only ownership evidence available
+            # when the native call is interrupted before it returns a result.
+            pointer = int(sid_pointer.value or 0)
+            _discard_partial_profile(
+                userenv, advapi, pointer, name, exc,
+                delete=bool(pointer),
+            )
+            raise
+        if result != 0:
+            code = result & 0xFFFFFFFF
+            if (code & 0xFFFF) == _ERROR_ALREADY_EXISTS:
+                raise WindowsJobError(
+                    "create AppContainer profile failed: profile name already "
+                    f"exists (HRESULT 0x{code:08x})"
+                )
+            raise WindowsJobError(
+                "create AppContainer profile failed "
+                f"(HRESULT 0x{code:08x})"
+            )
+        pointer = int(sid_pointer.value or 0)
+        try:
+            if not pointer:
+                raise WindowsJobError(
+                    "create AppContainer profile returned a null SID"
+                )
+            sid = _sid_string(advapi, pointer)
+            folder = _app_container_folder(userenv, sid)
+            return cls(
+                name=name,
+                sid=sid,
+                folder=folder,
+                sid_pointer=pointer,
+                userenv=userenv,
+                advapi=advapi,
+                owner=_APP_CONTAINER_OWNER,
+            )
+        except BaseException as exc:
+            _discard_partial_profile(
+                userenv, advapi, pointer, name, exc, delete=True,
+            )
+            raise
+
+    @property
+    def name(self) -> str:
+        """Return the profile name passed to :meth:`create`."""
+        return self._name
+
+    @property
+    def sid(self) -> str:
+        """Return the AppContainer SID as text."""
+        return self._sid
+
+    @property
+    def folder(self) -> Path:
+        """Return the profile folder reported by Windows."""
+        return self._folder
+
+    @property
+    def closed(self) -> bool:
+        """Return whether this profile released all owned resources."""
+        return self._closed
+
+    def _bind(self, process: "WindowsJobProcess") -> None:
+        """Bind one suspended process to this profile."""
+        self._bound = process
+
+    def _release_bound(self, process: "WindowsJobProcess") -> None:
+        """Drop the binding once *process* proved its tree stopped."""
+        if self._bound is process and process.tree_stopped:
+            self._bound = None
+
+    def close(self) -> None:
+        """Free this profile's SID and delete the profile it created.
+
+        Closing is idempotent after a full success.  A failure leaves
+        :attr:`closed` false and raises, so a partial release is never reported
+        as success.
+
+        Raises:
+            WindowsJobError: a bound process tree is still live or its state
+                cannot be verified, or SID/profile release failed.
+        """
+        if self._closed:
+            return
+        if self._sid_release_failed:
+            raise WindowsJobError(
+                "cannot close AppContainer profile: SID release previously "
+                "failed"
+            )
+        if self._failed_start is not None:
+            raise WindowsJobError(
+                "cannot close AppContainer profile: previous start cleanup "
+                "was unproven"
+            )
+        if self._sid_pointer is None:
+            raise WindowsJobError(
+                "cannot close AppContainer profile: SID is no longer owned"
+            )
+        bound = self._bound
+        if bound is not None and not bound.tree_stopped:
+            raise WindowsJobError(
+                "cannot close AppContainer profile: bound process tree is "
+                "live or unverified"
+            )
+        pointer = self._sid_pointer
+        self._sid_pointer = None
+        try:
+            _free_sid(self._advapi, pointer)
+        except BaseException:
+            self._sid_release_failed = True
+            raise
+        _delete_profile(self._userenv, self._name)
+        if bound is not None:
+            self._bound = None
+            if bound._app_container is self:
+                bound._app_container = None
+        self._closed = True
 
 
 class WindowsJobProcess:
@@ -379,6 +985,7 @@ class WindowsJobProcess:
         stdin_path: Path,
         cleanup_timeout: float,
         in_job: bool,
+        app_container: WindowsAppContainerProfile | None = None,
     ) -> None:
         self._api = api
         self._job = job
@@ -388,10 +995,12 @@ class WindowsJobProcess:
         self.cleanup_timeout = cleanup_timeout
         self.pid = pid
         self.in_job = in_job
+        self._app_container = app_container
         self.returncode: int | None = None
         self._resumed = False
         self._stopped = False
         self._closed = False
+        self._close_failed = False
         self._active = 1
 
     @classmethod
@@ -405,13 +1014,23 @@ class WindowsJobProcess:
         temp_dir: Path | None = None,
         env: Mapping[str, str] | None = None,
         cleanup_timeout: float = _DEFAULT_CLEANUP_SECONDS,
+        app_container: WindowsAppContainerProfile | None = None,
     ) -> "WindowsJobProcess":
         """Create *argv* suspended inside a new kill-on-close Job Object.
 
+        With ``app_container=None`` (the default) the legacy two-attribute
+        path and ``env=None`` inheritance behavior are unchanged.  With a
+        profile, ``env`` must be an explicit text mapping, the profile must be
+        open and unbound, and the child is created at low integrity with zero
+        capabilities.  The child token is verified before this method returns;
+        the caller still saves the PID and calls :meth:`resume`.
+
         Raises:
-            WindowsJobError: any Win32 setup, inheritance, or job-membership
-                check failed.  No process is left running on a raised error.
-            ValueError: argv is empty or contains NUL.
+            WindowsJobError: any Win32 setup, token identity, inheritance, or
+                job-membership check failed.  No process is resumed, and no
+                replacement process is started.
+            ValueError: argv, env, or profile input is invalid.  Validation
+                happens before any file, log, or process side effect.
         """
         if os.name != "nt":
             raise WindowsJobError("Windows Job Objects require Windows")
@@ -419,7 +1038,52 @@ class WindowsJobProcess:
             raise ValueError("argv must not be empty")
         if any("\0" in arg for arg in argv):
             raise ValueError("argv must not contain NUL")
+        if app_container is not None:
+            if not isinstance(app_container, WindowsAppContainerProfile):
+                raise ValueError(
+                    "app_container must be a WindowsAppContainerProfile"
+                )
+            if app_container._owner_token is not _APP_CONTAINER_OWNER:
+                raise ValueError(
+                    "app_container must be created by "
+                    "WindowsAppContainerProfile.create"
+                )
+            if app_container.closed:
+                raise WindowsJobError(
+                    "cannot start a process with a closed AppContainer "
+                    "profile"
+                )
+            if app_container._sid_release_failed:
+                raise WindowsJobError(
+                    "cannot start a process with an AppContainer profile "
+                    "whose SID release previously failed"
+                )
+            if app_container._sid_pointer is None:
+                raise WindowsJobError(
+                    "cannot start a process with an AppContainer profile "
+                    "whose SID is no longer owned"
+                )
+            if app_container._failed_start is not None:
+                raise WindowsJobError(
+                    "cannot start a process with an AppContainer profile "
+                    "whose previous start cleanup was unproven"
+                )
+            if env is None:
+                raise ValueError(
+                    "an explicit env mapping is required with app_container"
+                )
+            _validate_environment(env)
+            bound = app_container._bound
+            if bound is not None and not bound.tree_stopped:
+                raise WindowsJobError(
+                    "AppContainer profile is bound to a live or unverified "
+                    "process tree"
+                )
         api = _kernel32()
+        advapi = _advapi32() if app_container is not None else None
+        expected_user_sid = (
+            _current_user_sid(api, advapi) if advapi is not None else ""
+        )
         directory = temp_dir or Path(tempfile.gettempdir())
         directory.mkdir(parents=True, exist_ok=True)
         log_path.parent.mkdir(parents=True, exist_ok=True)
@@ -431,6 +1095,8 @@ class WindowsJobProcess:
         log_fd: int | None = None
         stdin_path: Path | None = None
         attribute_pointer: object | None = None
+        started: WindowsJobProcess | None = None
+        raw_problems: list[str] = []
         try:
             job = _create_job(api)
             stdin_fd, raw_stdin_path = tempfile.mkstemp(
@@ -448,10 +1114,13 @@ class WindowsJobProcess:
             )
             log_handle = _inheritable_handle(log_fd)
 
-            attributes = _attribute_list(
-                api, job, (stdin_handle, log_handle)
+            container_sid = (
+                None if app_container is None else app_container._sid_pointer
             )
-            buffer, job_handles, handle_array = attributes
+            attributes = _attribute_list(
+                api, job, (stdin_handle, log_handle), container_sid
+            )
+            buffer = attributes[0]
             attribute_pointer = ctypes.cast(buffer, wintypes.LPVOID)
             startup = _STARTUPINFOEXW()
             startup.StartupInfo.cb = ctypes.sizeof(startup)
@@ -471,8 +1140,8 @@ class WindowsJobProcess:
                 | _CREATE_UNICODE_ENVIRONMENT
                 | _EXTENDED_STARTUPINFO_PRESENT
             )
-            _check(
-                api.CreateProcessW(
+            try:
+                created = api.CreateProcessW(
                     None,
                     command_buffer,
                     None,
@@ -483,13 +1152,30 @@ class WindowsJobProcess:
                     current_directory,
                     ctypes.byref(startup),
                     ctypes.byref(info),
-                ),
-                "create contained process",
-            )
+                )
+            except BaseException:
+                # Ownership guard at the native return: an interrupt before
+                # the raw handles are copied into a managed object must still
+                # release the child and thread handles.
+                raw_problems.extend(
+                    _release_partial_process_information(api, info)
+                )
+                raise
+            if not created:
+                error = ctypes.get_last_error()
+                raw_problems.extend(
+                    _release_partial_process_information(api, info)
+                )
+                detail = ctypes.FormatError(error).strip()
+                raise WindowsJobError(
+                    "create contained process failed "
+                    f"(WinError {error}: {detail})"
+                )
             process = info.hProcess
             thread = info.hThread
-            # Keep the arrays alive through CreateProcessW.
-            del job_handles, handle_array
+            # Keep the attribute list and its backing objects alive through
+            # the native call above.
+            del attributes
             in_job = wintypes.BOOL()
             _check(
                 api.IsProcessInJob(process, job, ctypes.byref(in_job)),
@@ -497,7 +1183,11 @@ class WindowsJobProcess:
             )
             if not in_job.value:
                 raise WindowsJobError("created process is not in the job")
-            return cls(
+            if app_container is not None:
+                _verify_container_token(
+                    api, advapi, process, app_container, expected_user_sid
+                )
+            started = cls(
                 api=api,
                 job=job,
                 process=process,
@@ -506,31 +1196,64 @@ class WindowsJobProcess:
                 stdin_path=stdin_path,
                 cleanup_timeout=cleanup_timeout,
                 in_job=bool(in_job.value),
+                app_container=app_container,
             )
-        except BaseException:
-            if process is not None:
-                api.TerminateProcess(process, 1)
-                api.WaitForSingleObject(process, 5000)
+            if app_container is not None:
+                app_container._bind(started)
+            return started
+        except BaseException as exc:
+            if app_container is not None:
+                # Pessimistic until every cleanup step below is proven, so an
+                # interrupt during cleanup cannot leave a reusable profile.
+                app_container._failed_start = (
+                    "start failed before cleanup proved the tree stopped"
+                )
+            problems = list(raw_problems)
+            problems.extend(
+                _stop_started_process(api, process, job, cleanup_timeout)
+            )
             if thread is not None:
-                api.CloseHandle(thread)
+                try:
+                    if not api.CloseHandle(thread):
+                        problems.append("close thread failed")
+                except BaseException:
+                    problems.append("close thread failed")
             if process is not None:
-                api.CloseHandle(process)
+                try:
+                    if not api.CloseHandle(process):
+                        problems.append("close process failed")
+                except BaseException:
+                    problems.append("close process failed")
             if job is not None:
-                api.CloseHandle(job)
+                try:
+                    if not api.CloseHandle(job):
+                        problems.append("close job failed")
+                except BaseException:
+                    problems.append("close job failed")
             if stdin_fd is not None:
                 try:
                     os.close(stdin_fd)
                 except OSError:
-                    pass
+                    problems.append("close stdin failed")
                 stdin_fd = None
             if log_fd is not None:
                 try:
                     os.close(log_fd)
                 except OSError:
-                    pass
+                    problems.append("close log failed")
                 log_fd = None
             if stdin_path is not None:
-                _unlink_with_retry(stdin_path)
+                if not _unlink_with_retry(stdin_path):
+                    problems.append("unlink stdin failed")
+            if app_container is not None and not problems:
+                app_container._failed_start = None
+                if started is not None:
+                    if app_container._bound is started:
+                        app_container._bound = None
+                    if started._app_container is app_container:
+                        started._app_container = None
+            if problems and hasattr(exc, "add_note"):
+                exc.add_note("process cleanup: " + "; ".join(problems))
             raise
         finally:
             if attribute_pointer is not None:
@@ -726,14 +1449,57 @@ class WindowsJobProcess:
 
         Closing the job handle is itself a kill-on-close action.  This method
         does not mark a tree stopped unless :attr:`tree_stopped` was already
-        proved by a successful wait or termination.
+        proved by a successful wait or termination, and does not release a
+        bound AppContainer profile while that proof is missing.
+
+        Raises:
+            KeyboardInterrupt: the caller interrupted a ``CloseHandle`` call.
+                Remaining handles and the stdin file are still released first;
+                the failure stays sticky and the profile binding is kept.
+            SystemExit: same as ``KeyboardInterrupt`` for an exit request.
+            WindowsJobError: a ``CloseHandle`` call failed.  The object stays
+                closed to avoid double-closing unknown handles, and later calls
+                keep reporting the failure instead of success.
         """
+        if self._close_failed:
+            raise WindowsJobError("contained process close previously failed")
         if self._closed:
             return
         self._closed = True
+        # Pessimistic until every step below is proven, so an interrupt during
+        # cleanup cannot turn into a later false success.
+        self._close_failed = True
+        failed: list[str] = []
+        interrupted: BaseException | None = None
         for name in ("_thread", "_process", "_job"):
             handle = getattr(self, name)
             if handle:
-                self._api.CloseHandle(handle)
+                try:
+                    if not self._api.CloseHandle(handle):
+                        failed.append(name.lstrip("_"))
+                except (KeyboardInterrupt, SystemExit) as exc:
+                    # Keep the signal's own type; the handle state is unknown,
+                    # so it is not closed a second time.
+                    if interrupted is None:
+                        interrupted = exc
+                    failed.append(name.lstrip("_"))
+                except BaseException:
+                    failed.append(name.lstrip("_"))
                 setattr(self, name, wintypes.HANDLE(0))
-        _unlink_with_retry(self._stdin_path)
+        if not _unlink_with_retry(self._stdin_path):
+            failed.append("stdin")
+        if interrupted is not None:
+            if failed and hasattr(interrupted, "add_note"):
+                interrupted.add_note(
+                    "close contained process: " + ", ".join(failed)
+                )
+            raise interrupted
+        if failed:
+            raise WindowsJobError(
+                "close contained process failed: " + ", ".join(failed)
+            )
+        container = self._app_container
+        if container is not None:
+            container._release_bound(self)
+            self._app_container = None
+        self._close_failed = False
