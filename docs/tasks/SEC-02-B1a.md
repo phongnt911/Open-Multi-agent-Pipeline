@@ -3,7 +3,9 @@
 - Trạng thái: **REVIEW** (2026-10-27). Owner: AI thực thi B1a, một người tuần
   tự, không agent phụ. Reviewer: AI điều phối, độc lập với thực thi.
 - Gate: G3 mở. Phụ thuộc B0 ACCEPTED/PR #7 merged, main CI 40336785632 success 2/2.
-- Base: `bade93db8a71a5be116bde7792a112205e8fd4a4`; baseline **392 tests**.
+- Base khởi tạo B1a: `bade93db8a71a5be116bde7792a112205e8fd4a4`; commit B1a hiện
+  tại trên nhánh `codex/sec-02-b1a-native-primitives`:
+  `dae334830e3a0ae58dcbdcfbf29dc50693e124b5`; baseline **392 tests**.
 - Nhánh triển khai đề nghị: `codex/sec-02-b1a-native-primitives` từ đúng base.
   Chưa tạo nhánh trong lượt chuẩn bị. Local hiện ở nhánh B0 với dirty docs; phải
   preserve snapshot và kiểm base/code trước chuyển nhánh, không reset/clean/stash.
@@ -119,35 +121,99 @@ nghiệm thu các AC trên. Khi nhận việc ghi owner/IN_PROGRESS, cuối cùn
 
 ## Bằng chứng thực thi — 2026-10-27
 
-- Base/HEAD `bade93db8a71a5be116bde7792a112205e8fd4a4` giữ nguyên; nhánh
-  `codex/sec-02-b1a-native-primitives`, chưa commit. Chỉ sửa năm file ownership.
-- Fix review R1–R6: allocation/owner-construction guard + native interrupt
-  cleanup; failed-start cleanup kiểm terminate/wait/job-empty/close và poison
-  profile; unlink trả kết quả, close sticky + giữ binding; profile mất SID/
-  release lỗi/failed-start bị chặn trước `_kernel32`; native fixture cleanup
-  strict (collect + AssertionError, fallback terminate job); controls gỡ guard
-  hành vi (binding + failed-start) thay vì chỉ đổi error text.
-- Fix review R3a (r2): `WindowsJobProcess.close()` giữ đúng type
-  `KeyboardInterrupt`/`SystemExit` khi `CloseHandle` ném, vẫn chạy nốt cleanup
-  best-effort, ghi note đã sanitize cho bước lỗi, giữ sticky failure + profile
-  binding, không đóng lần hai handle không rõ trạng thái. Regression
-  `test_close_handle_interrupt_keeps_type_after_best_effort_cleanup` (2 interrupt
-  types + job CloseHandle false + unlink false), control revert close() fail
-  trước / pass sau.
-- Focused 3.12.7: **51 tests OK**, exit 0. Focused 3.14.8 (bản copy nhãn Medium):
-  **51 tests OK**, exit 0. `.omp` 3.14 local mang nhãn Low nên không tạo được
-  AppContainer profile; test fail-closed với thông báo prerequisite (30 unit
-  pass, không skip) — ghi BLOCKED cho đúng path đó, không giả PASS.
-- Full `tools/check.py`: 3.12.7 **443 tests OK** (98.9s); 3.14.8 Medium copy
-  **443 tests OK** (100.6s). Trước đó lần full 3.14 từng có 1 flake baseline
-  `test_recovery` (`os.replace` PermissionError) và flake PID reuse `git.exe`;
-  pass lại và pass trên 3.12, không phải thay đổi B1a.
-- Controls: base `windows_job.py` làm focused fail (ImportError); gỡ guard
-  binding và guard failed-start trên source copy đều làm regression fail vì
-  chạm `_kernel32` (side effect thật), source thật pass; hash source/sentinel
-  không đổi. Native probe 3.12 controller → 3.14.8 Worker: token AppContainer/
-  SID/low/0 capability, canary denied, hash không đổi. Package smoke (`uv`
-  build/venv 3.12.7/install/import/`omp --help`) OK. `git diff --check` exit 0.
+- Base khởi tạo `bade93db8a71a5be116bde7792a112205e8fd4a4`, HEAD hiện tại
+  `dae334830e3a0ae58dcbdcfbf29dc50693e124b5` trên nhánh
+  `codex/sec-02-b1a-native-primitives`, chưa tạo commit mới. Chỉ sửa
+  `tests/test_appcontainer_process.py`, `docs/tasks/SEC-02-B1a.md` và
+  `docs/handoffs/SEC-02-B1a.md` trong vòng khắc phục CI (`omp_core/windows_job.py`
+  và `docs/CONTRACTS.md` giữ nguyên byte-for-byte).
+- Fix review R1–R6 + R3a trước đó: giữ nguyên đầy đủ (allocation/owner-construction
+  guard, failed-start cleanup + poison, sticky `close()` giữ đúng type
+  `KeyboardInterrupt`/`SystemExit`, usability guards, strict fixture cleanup).
+- Fix review CI (`docs/reviews/SEC-02-B1a-CI.md`, `docs/reviews/SEC-02-B1a-CI-r2.md`, `docs/reviews/SEC-02-B1a-CI-r3.md`):
+  - **SEC02B1A-CI-R1 & SEC02B1A-CI-R1a / R1a1**: Khi interpreter đang ở `S-1-16-12288`
+    (High integrity trên GitHub Actions runner), `AppContainerNativeTests.setUpClass`
+    uỷ quyền sang process con Python controller ở Medium integrity (`S-1-16-8192`)
+    tạo bằng `DuplicateTokenEx` + `SetTokenInformation(TokenIntegrityLevel, S-1-16-8192)` +
+    `CreateProcessAsUserW` (chữ ký chuẩn 11 tham số Win32, tạo `CREATE_SUSPENDED | CREATE_NO_WINDOW`).
+    Ownership được bảo vệ liên tục qua mọi boundary:
+    * `primary` token được bao bọc trong try/finally đóng bằng `_close_handle_checked`
+      ngay khi duplicate xong; nếu `_close_handle_checked(own)` lỗi, `primary` vẫn
+      được đóng trước khi re-raise.
+    * `_OwnedDesktop.create` và `_spawn_with_token` nằm trong cùng khối try có
+      bảo vệ đóng `primary` token (Trigger B: desktop create lỗi thì `primary`
+      token vẫn được đóng và không leak).
+    * Khi `_spawn_with_token` đã sinh child suspended: nếu bước đóng `primary`
+      token ném `KeyboardInterrupt`/`SystemExit` (Trigger A) hoặc `CloseHandle`
+      trả `FALSE`/ném `OSError` (Trigger C), `_start_with_medium_token` tự chạy
+      ngay `_cleanup_controller_on_exception` để terminate child process, chờ wait
+      xong, đóng handle process/thread, đóng `_OwnedDesktop`, và poison
+      `_UNPROVEN_CONTROLLER_STATE` để chặn mở replacement controller.
+    * Caller `_delegate_native_controller` nhận `out_info=info` từ trước khi spawn,
+      có cờ `_cleaned_up` để ngăn chặn double-cleanup và double-close.
+    * `_close_handle_checked` kiểm tra giá trị `BOOL` của `CloseHandle`, zero giá
+      trị handle và ném `OSError` kèm winerror nếu trả về `FALSE`.
+    * Interpreter `S-1-16-4096` (Low) vẫn fail-closed.
+  - **SEC02B1A-CI-R1a2**: Xoá bỏ hoàn toàn compatibility retry bắt `TypeError` trong
+    `_delegate_native_controller`; gọi trực tiếp `_start_with_medium_token(..., out_info=info)`
+    chỉ một lần duy nhất. Cập nhật các fake factories (`fake_start` và `start`) trong
+    test harness để nhận `out_info: _PROCESS_INFORMATION | None = None` và cập nhật
+    handles/PID theo caller-owned contract. Lỗi nội bộ (`TypeError` hoặc bất kỳ ngoại lệ nào)
+    từ factory hoặc bên trong bước khởi tạo sẽ lập tức lan truyền (propagate) ra ngoài
+    sau khi đã dọn dẹp tài nguyên qua `_cleanup_controller_on_exception`; factory tuyệt
+    đối không bị retry hay che giấu lỗi. Thêm regression test
+    `test_delegate_internal_type_error_propagates_without_retry_or_swallowing` (chứng
+    minh fail-before trên code cũ với `AssertionError: TypeError not raised` và pass-after)
+    cùng Control 8 trong controls script.
+  - **SEC02B1A-CI-R1b**: Xoá hoàn toàn `_set_desktop_dacl` và mọi thao tác
+    `SetSecurityInfo` lên desktop hiện tại của caller; không sửa DACL của
+    `.omp/test-tmp` dùng chung. Khi desktop hiện tại không có sẵn ACE cho `AC`
+    (kiểm tra read-only qua `_current_desktop_allows_appcontainer`),
+    `_delegate_native_controller` tạo một desktop tạm độc quyền thuộc quyền sở hữu
+    của fixture (`_OwnedDesktop.create` qua `CreateDesktopW` với SDDL tối thiểu chỉ
+    cấp `SYSTEM`, `Administrators`, user hiện tại và `AC`), gắn child controller và
+    các AppContainer Worker vào desktop sở hữu này qua `STARTUPINFOW.lpDesktop`, và
+    đóng bằng `CloseDesktop` có kiểm tra kết quả sau khi chứng minh child đã dừng
+    (đã **Resolved** trong `SEC-02-B1a-CI-r3.md`).
+  - **SEC02B1A-CI-R1c**: `_validate_child_evidence` (và `AppContainerNativeTests._delegated`)
+    xác thực đầy đủ schema có kiểu và bất biến bảo mật của cả 6 native tests (gồm
+    `test_secure_worker_token_identity_and_owned_isolation` với `ReadFile` kiểm tra
+    foreign handle, `test_same_user_control_reads_and_writes_the_same_canary` với
+    SHA-256 64-hex hợp lệ và `tree_stopped is True`, `test_interrupted_allocation_releases_real_profile`,
+    `test_real_collision_never_deletes_existing_profile`, `test_profile_close_refuses_live_tree_then_allows_sequential_reuse`,
+    và `test_root_early_exit_with_live_descendant_is_failure`), từ chối mọi gói bằng
+    chứng thiếu trường, rỗng, trùng PID hoặc mâu thuẫn ở cả ranh giới validator và
+    `_delegate_native_controller` (đã **Resolved** trong `SEC-02-B1a-CI-r3.md`).
+  - **SEC02B1A-CI-R2**: `NativeFixtureCleanupTests.test_cleanup_collects_all_failures_and_raises`
+    tự cấp phát `TemporaryDirectory(prefix="omp-b1a-cleanup-")` độc quyền, đăng ký
+    `self.addCleanup(root.cleanup)` ngay khi tạo, patch `SCRATCH_ROOT` trỏ tới đường
+    dẫn con chưa tồn tại để chứng minh test độc lập hoàn toàn với thứ tự chạy và
+    `.omp/test-tmp`, đồng thời giữ nguyên mọi assertion gom đủ 4 lỗi và xoá sạch
+    `scratch` (đã **Resolved** trong `SEC-02-B1a-CI-r2.md`).
+- Focused 3.12.7: **65 tests OK** (3.456s, exit 0). Focused 3.14.8 (bản copy nhãn
+  Medium): **65 tests OK** (3.807s, exit 0). `.omp` 3.14 local mang nhãn Low chạy
+  58 unit tests OK và fail-closed ở `AppContainerNativeTests.setUpClass` (`S-1-16-4096`,
+  0 skip, exit 1) — ghi BLOCKED cho đúng path Low-labeled đó, không giả PASS.
+- Full `tools/check.py`: 3.12.7 **457 tests OK** (126.142s, exit 0); 3.14.8 Medium
+  copy **457 tests OK** (122.972s, exit 0). Baseline **392 tests** không đổi.
+- Controls & phân biệt nguồn gốc bằng chứng (provenance):
+  `.omp/sec02-b1a-ci-r1-r2-controls.py` (`CI_R1_R2_CONTROLS_OK`) chứng minh
+  fail-before trên commit `dae334830e3a0ae58dcbdcfbf29dc50693e124b5`, pass-after
+  cho nhánh uỷ quyền với parent thực tế ở Medium (`parent_actual_integrity: S-1-16-8192`)
+  và nhánh `S-1-16-12288` được kích hoạt qua mock chỉ ở bước kiểm tra đầu vào của
+  parent (`provenance_mode: injected_high_parent_to_real_medium_child`) để sinh
+  child controller Medium thật trên desktop fixture sở hữu cho cả 3.12.7 (child PID
+  31228, Worker PID 61180) và 3.14.8 (child PID 60888, Worker PID 61388) mà không sửa
+  DACL desktop của caller (`caller_desktop_dacl_unchanged: true`,
+  `has_set_desktop_dacl: false`), cùng R2 với `SCRATCH_ROOT` chưa tồn tại và 8
+  negative controls trên bản copy source (gồm Control 7 R1a1 và Control 8 R1a2) đều fail đúng kỳ vọng.
+  Reviewer typeerror probe `.omp/sec02-b1a-ci-r4-review-typeerror.py --assert-no-retry`
+  và reviewer boundary probe `.omp/sec02-b1a-ci-r3-review-boundaries.py --assert-safety`
+  đều đạt exit 0. Bằng chứng từ parent thực sự chạy ở High (`S-1-16-12288`) cần tiến
+  trình elevated/CI runner High thật, không được tuyên bố từ lần chạy local không nâng quyền.
+  `.omp/sec02-b1a-controls.py` (`CONTROLS_OK`), `.omp/sec02-b1a-r3a-control.py`
+  (`R3A_CONTROL_OK`), `.omp/sec02-b1a-package-smoke.py` (`PACKAGE_SMOKE_OK`),
+  `git diff --check` exit 0.
 - Chi tiết lệnh, hash, AC mapping, giới hạn và prompt reviewer:
   `../handoffs/SEC-02-B1a.md`. Mọi log nằm trong `.omp/sec02-b1a-*`.
 - Chưa commit/push/merge/DONE, chưa đóng G3; không nhận B1b/B1c.
