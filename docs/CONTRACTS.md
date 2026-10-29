@@ -165,6 +165,60 @@ checkpoint schema.
   Fixture native chỉ dùng runtime/workspace/profile/canary tạm, không claim tài
   sản repo/vault thật.
 
+## Hợp đồng SEC-02-B1b: Layout L2, Trusted Inputs và Offline Reader
+
+- `omp_core.trusted_layout.build_trusted_environment(run_id, task_id, *, temp_dir, runtime_path=None, extra_omp_keys=None, local_app_data=None)`:
+  Dựng mapping môi trường mới từ đầu cho Worker AppContainer:
+  - Chỉ chứa `SystemRoot`, `SystemDrive`, `PATH` (chỉ runtime và System32), `TEMP`/`TMP` (thư mục temp do run sở hữu), `LOCALAPPDATA` (nếu có), `OMP_RUN_ID`, `OMP_TASK_ID` và các biến tiền tố `OMP_` tường minh.
+  - Từ chối key/value không phải string, rỗng, chứa NUL hoặc trùng lặp không phân biệt hoa thường. Key phải tuân theo pattern identifier Win32 (`^[A-Za-z_][A-Za-z0-9_]*$`), cấm chứa ký tự `=`.
+  - Kiểm tra đường dẫn khắt khe (R7a): `temp_dir` và `runtime_path` (nếu có) bắt buộc là đường dẫn tuyệt đối, phải tồn tại thực tế và là thư mục (`is_dir()`), cấm chứa dấu chấm phẩy `;` (ngăn PATH separator injection), và cả bản thân lẫn mọi thư mục tổ tiên không được là reparse point hay junction.
+  - Cấm kế thừa `os.environ` của cha, cấm nhận env từ task và chặn triệt để biến nguy hiểm (`PYTHONPATH`, `PYTHONHOME`, `COMSPEC`, `SHELL`, `LD_PRELOAD`).
+  - Worker CPython 3.12 thực thi bắt buộc nhận cờ `-I -P`.
+- `omp_core.trusted_layout.TrustedManifest`:
+  Manifest verification độc lập với schema riêng `omp.sec02.b1b.manifest.v1` (không phải checkpoint schema).
+  - Thuộc tính bắt buộc: `schema_version`, `task_id`, `run_id`, `nonce`, `verifier_version`, `candidate_bytes_sha256` (64 hex lowercase), `canonical_tree_oid` (40 hoặc 64 hex lowercase khớp với `tree_algorithm`), `tree_algorithm` (`sha1` yêu cầu 40 hex chars; `sha256` yêu cầu 64 hex chars), `approved_argv` (tuple chuỗi không rỗng, không NUL), `timeout_seconds` (float/int dương hữu hạn, loại trừ bool), `spec_hash` (64 hex lowercase), `expected_artifact_relpath` (relative path chuẩn hóa forward-slash, không traversal, không NUL).
+  - Strict typing: từ chối trường lạ, sai kiểu (bool không thay thế int/float), timeout không hợp lệ hoặc format hash sai.
+  - Xuất bản nguyên tử không ghi đè (R4a): ghi vào temp file độc quyền (`os.O_CREAT | os.O_EXCL`), flush, fsync và commit bằng atomic move không thay thế đích (`os.rename` trên Windows, MoveFileExW không cờ `MOVEFILE_REPLACE_EXISTING`). Nếu file đích đã tồn tại với cùng nội dung, coi là thành công idempotent và dọn dẹp file temp. Nếu file đích tồn tại với nội dung khác, từ chối thay thế (`TrustedLayoutSecurityError`), bảo toàn 100% bytes file đích và dọn dẹp file temp.
+  - `verify_candidate(candidate_bytes, invocation_argv)` đối soát tính toàn vẹn bytes và argv đã phê duyệt; drift hoặc replay bị từ chối mà không làm lộ payload.
+- `omp_core.trusted_layout.OwnedL2Layout`:
+  Quản lý cấu trúc thư mục L2 sở hữu độc quyền tại disposable root:
+  - Cấu trúc: `<repo>/.omp/runs/<run_id>/checkout`, `vault`, `state`, `log`, `tmp`. Root phải được tạo mới độc quyền; từ chối root có sẵn hoặc reparse point.
+  - DACL trên Windows (R6a, R6b, R6c): User SID có Full Control trên toàn bộ cây; Container SID có traverse trên thư mục cha (`_FILE_GENERIC_EXECUTE`, exact mask `0x1200A0`, flags `0`), Full Control có kế thừa (`_OBJECT_INHERIT_ACE | _CONTAINER_INHERIT_ACE`, mask `0x1F01FF`) trên `checkout` và `tmp`, và tuyệt đối không có quyền (không có ACE) trên `vault`, `state`, `log` (user-only protected DACL). Ancestor DACL verification (R6b, R6c) kiểm tra chính xác số lượng ACE (đúng 2 ACE), User mask `_FILE_ALL_ACCESS`, flags 0; Container mask `0x1200A0`, flags 0 (từ chối container có mask `0x1200A9`, Full Control hoặc inheritance flags trên ancestor). Mọi ACE lạ (như `Everyone` `S-1-1-0`, deny ACE hay foreign SID) trên vùng bảo vệ đều bị từ chối fail-closed.
+  - Mandatory Integrity Label: Gán nhãn Low Integrity `S-1-16-4096` kế thừa trên `checkout`.
+  - Đọc lại DACL và SACL label để xác thực native với đầy đủ type/mask/flags và đối soát cả ancestor traverse; truy vấn lỗi hoặc thiếu quyền phải fail-closed.
+  - Dọn dẹp an toàn và fail-closed (R5a, R5c): dọn dẹp chỉ xóa tài nguyên sở hữu. `_reset_dacl_for_deletion` kiểm tra trực tiếp DWORD return code từ `SetNamedSecurityInfoW` (R5c); nếu mã khác `ERROR_SUCCESS` (0) hoặc rmtree gặp lỗi, `self._cleaned` giữ nguyên `False` và raise `TrustedLayoutError` (không báo sạch giả). Toàn bộ exception chain (`__cause__` và `__context__`) được đệ quy sanitize làm sạch token/secret/password/bearer (`Bearer <credential>`) qua `_sanitize_exception_chain` mà không dựa vào fake markers (R5b), đồng thời bảo toàn exception type gốc (`KeyboardInterrupt`/`SystemExit`).
+- `omp_core.trusted_layout.read_trusted_artifact(checkout_dir, rel_path, *, job_process, manifest, candidate_relpath=None, actual_argv=None, actual_timeout=None, actual_tree_oid=None, actual_spec_hash=None)`:
+  Đọc artifact JSON từ Worker theo cơ chế handle an toàn:
+  - Kiểm tra điều kiện tiên quyết từ Windows Job Object: bắt buộc `isinstance(job_process, WindowsJobProcess)`, `job_process.tree_stopped is True`, `type(job_process.active_processes) is int` và `job_process.active_processes == 0`. Tiến trình còn sống, không rõ trạng thái, duck typing hoặc caller truyền bool đơn thuần đều bị từ chối ngay lập tức.
+  - Neo root `checkout_dir` bằng directory handle mở với `FILE_FLAG_BACKUP_SEMANTICS | FILE_FLAG_OPEN_REPARSE_POINT` không cấp `FILE_SHARE_DELETE` (R2a): directory handle được giữ mở liên tục xuyên suốt toàn bộ quá trình mở và đọc file artifact (chống swap directory hay rename race), sau đó xác minh normalized final path của root handle không bị tráo đổi.
+  - Mở handle file bằng `CreateFileW` với cờ `FILE_FLAG_OPEN_REPARSE_POINT` nằm trong try block của root handle:
+    - Xác minh `GetFileType == FILE_TYPE_DISK`.
+    - Kiểm tra `FILE_ATTRIBUTE_REPARSE_POINT` và `nNumberOfLinks <= 1`; từ chối symlink, junction, reparse point và hardlink ra ngoài.
+    - Kiểm tra `GetFinalPathNameByHandleW`: đường dẫn chuẩn hóa cuối cùng phải nằm hoàn toàn trong root đã neo, không chứa alternate data stream (`:`) hay device/traversal path.
+    - Đọc tối đa 64 KiB + 1 byte; từ chối file vượt quá 64 KiB (65536 bytes).
+    - Kiểm tra lại file identity sau khi đọc để loại bỏ rủi ro TOCTOU.
+  - Bắt buộc xác minh candidate trên đĩa (R3a, R3b): canonical candidate identity được phân giải tự động từ tham số script đầu tiên trong `manifest.approved_argv[1:]`. Nếu caller truyền `candidate_relpath`, đường dẫn này bắt buộc phải trùng khớp với canonical approved candidate identity (R3b); mọi trường hợp dùng decoy path để lách script không được duyệt đều bị từ chối bằng `TrustedLayoutSecurityError`. Kiểm tra candidate file tồn tại là regular file, đọc bytes và đối soát SHA-256 khớp tuyệt đối với `manifest.candidate_bytes_sha256`.
+  - Bắt buộc đầy đủ execution bindings (R3b): các đối số thực thi `actual_argv`, `actual_timeout`, `actual_tree_oid`, `actual_spec_hash` là bắt buộc (không được phép None hoặc bỏ sót). Bất kỳ đối số nào bị thiếu hoặc lệch so với manifest đã phê duyệt đều bị từ chối fail-closed bằng `TrustedLayoutSecurityError`. `actual_timeout` được so sánh đẳng thức số dương hữu hạn có kiểu (`actual_timeout == manifest.timeout_seconds`), từ chối NaN, bool, số âm, hoặc timeout bị thay đổi/hạ thấp.
+  - An toàn xử lý lỗi và ngắt trong reader cleanup (R5b, R5d): khi đọc artifact gặp bất kỳ lỗi hoặc ngắt nào (`KeyboardInterrupt`, `SystemExit`, `OSError`), exception chain được sanitize trên mọi đường truyền (không phụ thuộc vào việc đóng handle thành công hay thất bại); kiểu ngoại lệ ban đầu (`KeyboardInterrupt` / `SystemExit`) được bảo toàn nguyên vẹn khi raise; nếu đóng handle thất bại, lỗi đóng handle được lưu vào `__context__` an toàn đã sanitize.
+  - Decode strict UTF-8 và parse JSON; đối soát `task_id`, `run_id`, `nonce` khớp chính xác với manifest đã phê duyệt. Xác thực schema artifact khắt khe (R3a): các trường số lượng (`failures`, `errors`) phải là integer `>= 0` (loại trừ bool/str); trường `output` phải là string; nếu `status` là `PASS` hoặc `success` thì bắt buộc `failures == 0` và `errors == 0`.
+- Controller Delegation và Raw Evidence (R8a, R8b, R8c, R8d):
+  - High controller chạy native suite qua Medium child thật; khởi tạo kernel32 trước spawn, giải phóng handle trong `finally`. Chỉ bỏ terminate khi đã có `WaitForSingleObject == WAIT_OBJECT_0`; lỗi trước bằng chứng exit vẫn yêu cầu terminate. Không nới helper baseline.
+  - Reference identity trong report là dữ liệu fixture trusted để kiểm mâu thuẫn, không phải chữ ký hoặc authority của report đối kháng.
+  - Trích xuất domain-specific `raw_evidence` từ các test native (R8c): `test_native_l2_layout_and_os_access_denial`, `test_native_artifact_reader_with_job_proof`, `test_native_descendant_blocks_reader_until_stopped` thu thập observations có kiểu về token, DACL/label, canary negative & positive controls, reader state, descendant readiness/tree stop, và cleanup.
+  - Controller runner fail-closed nếu thiếu observations, không fallback gán PASS giả (R8c).
+  - Validator kiểm tra per-test schema và typed invariants nghiêm ngặt (R8d):
+    - `in_any_job` và các cờ trạng thái (`running_reader_refused`, `stopped_reader_passed`, `drift_reader_refused`, `child_marker_verified`, `active_processes_alive`, v.v.) bắt buộc là strict bool `True` (từ chối chuỗi `'NO'`, số 1, bool `False`).
+    - `capabilities` strict int 0 (từ chối `False` hay số khác 0).
+    - `appcontainer_sid` fullmatch chữ số ASCII, từ chối newline cuối; token SID quan sát từ OS phải khớp `profile_sid` của profile owned.
+    - `tree_oid`/`candidate_sha` fullmatch hex thường và khớp `manifest_identity` từ manifest đã approve; `tree_algorithm` phải khớp độ dài OID 40/64. Thiếu reference hoặc identity lệch bị từ chối.
+    - `artifact_status` bắt buộc là `'PASS'` hoặc `'success'` (từ chối `'FAIL'`).
+    - Loại bỏ triệt để các mâu thuẫn giữa summary report và raw evidence.
+- Giới hạn B1b:
+  - Module offline phục vụ kiểm thử và xác minh; chưa tích hợp vào CLI hoặc orchestrator `main.py` (thuộc B1c).
+  - Không bảo vệ network, credential hệ thống hay chống cúp điện đột ngột ở mức OS.
+  - Áp dụng trên Windows Python 3.12 theo quyết định của chủ dự án; không claim hỗ trợ nền tảng khác.
+
+
 ## Ranh giới module mục tiêu
 
 | Trách nhiệm | Đầu vào/đầu ra | Quyền side effect |
