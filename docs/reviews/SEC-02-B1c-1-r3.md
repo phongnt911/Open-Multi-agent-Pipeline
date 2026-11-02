@@ -37,7 +37,7 @@ Antigravity review tĩnh ở conversation mới `ebacc6d3-60db-4120-b170-44dc6f1
 
 - Job `125175766853`, CPython3.12.10: 553 tests OK/137.267s; native byte lock/rival/cleanup tests và bốn mutant có trong log; package build/install và installed entrypoint smoke success.
 - Job `125175766416`, CPython3.14.9: 553 tests OK/148.168s; cùng native/mutant evidence; package/smoke success.
-- Source Git blob `4d0dfe9be15e2cad7e91f509af28da9cb92c28be`, test blob `f7b0dc521f6760ad699cf359d154c890a8254370`. Commit nghiệm thu sau chỉ đổi docs/status, bắt buộc đối chiếu hai blob này; không dùng CI cũ cho code đã đổi.
+- Candidate source Git blob `4d0dfe9be15e2cad7e91f509af28da9cb92c28be`, test blob `f7b0dc521f6760ad699cf359d154c890a8254370`. Commit nghiệm thu `97df68e` chỉ đổi docs/status. Delta cuối đổi sentinel từ chuỗi vẫn chứa SECRET thành `opaque value qz91`, tăng độ đúng của regression redaction; focused32 OK/2.568s, log `b1c1-focused-1793609324245172800.log`. Final test blob `ce2400545181a83d05734cc2c67791d7ab6ae9e1`, source blob không đổi. Phải kiểm CI final head/PR; không dùng CI candidate thay cho tests đã đổi.
 
 ## Giới hạn và bước tiếp theo
 

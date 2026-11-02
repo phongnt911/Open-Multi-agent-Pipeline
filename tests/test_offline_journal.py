@@ -624,7 +624,7 @@ class TestFaultInjectionAndSanitization(unittest.TestCase):
 
     def test_j2_r3_opaque_sentinel_sanitization_in_traceback_and_cause(self) -> None:
         """J2-R3: Non-pattern opaque sentinel is not echoed in message, cause, context, or traceback."""
-        opaque_sentinel = "OPAQUE_SECRET_SENTINEL_NON_PATTERN_xyz999"
+        opaque_sentinel = "opaque value qz91"
         bad_rec = dict(_make_record(0), **{opaque_sentinel: "opaque input"})
 
         with self.assertRaises(OfflineJournalSecurityError) as caught:
