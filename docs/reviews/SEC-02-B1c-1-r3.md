@@ -1,6 +1,6 @@
 # SEC-02-B1c-1 — review r3 của điều phối
 
-- Verdict: BLOCKED chờ bằng chứng Windows Python3.14 và CI exact revision; local implementation không còn finding chặn. Task REVIEW, chưa DONE.
+- Verdict: ACCEPTED cho B1c-1 sau Windows Python3.12/3.14 CI trên candidate `6e274213a900047d9b1df5ed1cbccdd1b8cec7d9`; task DONE implementation-only. Final head/PR vẫn phải CI trước merge; whole B1/B1c/G3 chưa DONE.
 - Base `84ed4f98e103881ce98c491875d2d5427a7cb791`; branch `codex/sec-02-b1c-journal`.
 - Scope: một module journal/expectation, một file tests mới và hồ sơ hợp đồng/giao việc/review. Main/CLI/state/B1a/B1b/tests cũ/workflow/dependencies không đổi. README sửa link G1-CLOSURE không có trên base thành ROADMAP đã có; không nhập tài liệu dirty lịch sử.
 
@@ -18,7 +18,7 @@ Antigravity review tĩnh ở conversation mới `ebacc6d3-60db-4120-b170-44dc6f1
 | J4 | Stream write/short-write/flush/close, open/fdopen/fsync/rename, lock/unlock/cleanup-unlink và interrupt; fd được đóng; cause/context/notes/filename không echo input; primary không bị cleanup mask |
 | J5 | Windows child tranh byte lock khi owner sống/sau close; unlock lỗi vẫn close handle; child tạo target giữa fsync/rename, exact bytes idempotent, khác bytes giữ nguyên và refuse |
 | J6 | Cùng acceptance assertions qua real guard và 4 mutants: chain helper, phase table, Oracle bỏ output hoặc count. Mỗi mutant thật gây AssertionError theo kỳ vọng, không chỉ định nghĩa hàm rồi bỏ đó |
-| J7 | Local Windows Python3.12.7 source checks + 553 tests OK; Windows3.12/3.14 CI exact revision và packaging/smoke PENDING |
+| J7 | Local Windows Python3.12.7 source checks + 553 tests OK; Windows3.12.10/3.14.9 CI candidate success 2/2, 553 tests mỗi lane + build/install/entrypoint smoke |
 | J8 | Handoff gốc giữ lịch sử với amendment; giới hạn/chưa chạy ghi rõ; original checkout bảo toàn |
 
 ## Lệnh và kết quả
@@ -31,6 +31,14 @@ Antigravity review tĩnh ở conversation mới `ebacc6d3-60db-4120-b170-44dc6f1
 - `python .omp/b1c1-doc-check.py`: source/local Markdown links pass sau sửa link README cũ; `python .omp/b1c1-preserve.py`: 180 original files không drift, original index empty, không file ngoài ownership. Git diff whitespace/scope check trước commit.
 - Test count gồm 521 baseline + 32 mới; subTests không được đếm thành test riêng. Không skip/nới expected test cũ.
 
+## Windows CI candidate và kiểm soát revision
+
+[Run 41414745164](https://github.com/phongnt911/Open-Multi-agent-Pipeline/actions/runs/41414745164), exact checkout `6e274213a900047d9b1df5ed1cbccdd1b8cec7d9`, success 2/2. Đã đọc logs từng job, không chỉ status:
+
+- Job `125175766853`, CPython3.12.10: 553 tests OK/137.267s; native byte lock/rival/cleanup tests và bốn mutant có trong log; package build/install và installed entrypoint smoke success.
+- Job `125175766416`, CPython3.14.9: 553 tests OK/148.168s; cùng native/mutant evidence; package/smoke success.
+- Source Git blob `4d0dfe9be15e2cad7e91f509af28da9cb92c28be`, test blob `f7b0dc521f6760ad699cf359d154c890a8254370`. Commit nghiệm thu sau chỉ đổi docs/status, bắt buộc đối chiếu hai blob này; không dùng CI cũ cho code đã đổi.
+
 ## Giới hạn và bước tiếp theo
 
-Chỉ deterministic fixture Oracle và observations journal. Trusted harness sở hữu parent/control directory ngoài quyền Worker; module không cấp ACL hoặc bảo vệ real assets. Hash chain không chữ ký/immutable vault; inspection không ownership/OS proof. Native I/O/lock/race tests không AppContainer/owner-crash/power-loss proof. Local Python3.14/B1c-2 proof: NOT RUN. G3 mở; B1c-2 execution/bridge/recovery authority, B2/SEC-03/G4 chưa giao. Chỉ nghiệm thu sau CI Windows hai phiên bản, rồi tích hợp đúng head đã kiểm.
+Chỉ deterministic fixture Oracle và observations journal. Trusted harness sở hữu parent/control directory ngoài quyền Worker; module không cấp ACL hoặc bảo vệ real assets. Hash chain không chữ ký/immutable vault; inspection không ownership/OS proof. Native I/O/lock/race tests không AppContainer/owner-crash/power-loss proof. Local Python3.14/B1c-2 proof: NOT RUN. G3 mở; B1c-2 execution/bridge/recovery authority, B2/SEC-03/G4 chưa giao. Candidate CI đã đủ nghiệm thu B1c-1; final documentation head/PR phải CI hai phiên bản trước merge và kiểm main sau merge.

@@ -1,6 +1,6 @@
 # SEC-02-B1c-1 — journal và expectation cho fixture offline
 
-- Trạng thái: REVIEW (local đạt, chờ CI Windows3.12/3.14 exact revision); giao bởi điều phối ngày 2026-11-02 theo yêu cầu tiếp tục của chủ dự án.
+- Trạng thái: DONE implementation-only (điều phối ACCEPTED theo review r3, candidate CI Windows3.12/3.14 đủ evidence); giao bởi điều phối ngày 2026-11-02 theo yêu cầu tiếp tục của chủ dự án.
 - Owner triển khai: Antigravity CLI tuần tự; reviewer/nghiệm thu: điều phối.
 - Base: `84ed4f98e103881ce98c491875d2d5427a7cb791`, branch `codex/sec-02-b1c-journal`, worktree `.omp/sec02-b1c-journal`.
 - Phụ thuộc: B1c-DESIGN/ADR-0011 ACCEPTED (PR #11); B1a/B1b DONE. Baseline 521 tests.

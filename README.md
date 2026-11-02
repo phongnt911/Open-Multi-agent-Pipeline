@@ -158,7 +158,8 @@ hoặc nhận tiếp task khác.
 đạt 521 tests trên mỗi lane Windows Python 3.12/3.14 cùng packaging/smoke.
 Xem [báo cáo merge](docs/reviews/SEC-02-B1b-MERGE.md) và
 [phân gói B1](docs/tasks/SEC-02-B1.md). B1c-DESIGN đã nghiệm thu qua PR #11;
-[B1c-1](docs/tasks/SEC-02-B1c-1.md) đã triển khai journal/expectation offline, đang REVIEW trước tích hợp.
+[B1c-1](docs/tasks/SEC-02-B1c-1.md) đã nghiệm thu journal/expectation offline với 32 tests mới (tổng 553),
+Windows CI Python3.12/3.14 và package/smoke đạt; xem [review](docs/reviews/SEC-02-B1c-1-r3.md).
 B1c-2 execution/B2 chưa giao; G3 còn mở.
 B1b chỉ có module/fixture offline, chưa nối vào main/CLI hoặc kích hoạt
 production boundary; không tuyên bố đã bảo vệ tài sản thật.

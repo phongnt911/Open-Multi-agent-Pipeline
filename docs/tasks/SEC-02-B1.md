@@ -12,7 +12,7 @@
 | [SEC-02-B1a](SEC-02-B1a.md) | DONE (2026-10-28, PR #8) | Native profile/process primitive, default runner giữ nguyên | Windows CI 3.12/3.14, 457 tests mỗi job |
 | [SEC-02-B1b](SEC-02-B1b.md) | DONE (2026-10-29, PR #9) | L2 layout/env/manifest/artifact reader offline | Sáu file ownership; không activation/orchestration |
 | [B1c-DESIGN](SEC-02-B1c-DESIGN.md) | DONE (DESIGN only) | Hợp đồng journal/expectation, ownership và compatibility offline | [ADR-0011](../decisions/0011-b1c-offline-orchestration.md), [review r3](../reviews/SEC-02-B1c-DESIGN-r3.md) |
-| [B1c-1](SEC-02-B1c-1.md) | REVIEW | Journal/expectation core, fixture file I/O và Oracle | ADR-0011; không activation hoặc schema production mới |
+| [B1c-1](SEC-02-B1c-1.md) | DONE implementation-only | Journal/expectation core, fixture file I/O và Oracle | ADR-0011; không activation hoặc schema production mới |
 | B1c-2 trở đi | Chưa giao | Execution/bridge/recovery | Task và review riêng sau B1c-1 |
 
 B1 DONE chỉ khi tất cả gói integration được giao/nghiệm thu/tích hợp, không

@@ -2,6 +2,8 @@
 
 ## Hiệu đính và kiểm chứng của điều phối
 
+Điều phối nghiệm thu B1c-1 theo [review r3](../reviews/SEC-02-B1c-1-r3.md): full553 local và candidate CI Windows3.12/3.14 success 2/2, native file/lock/rival/mutant evidence đã đọc. Trạng thái lịch sử stage3 bên dưới không phải trạng thái cuối; task cụ thể là nguồn hiện hành.
+
 Báo cáo stage3 phía dưới là lịch sử tự báo của Antigravity, chưa phải nghiệm thu. Khi chạy thực tế còn hai lỗi fixture và thiếu coverage dù báo cáo mô tả đầy đủ. Điều phối nhận hiệu đính cả tests: sentinel run_id ban đầu thực ra hợp lệ, phase mutant vô tình drop PID nên bị guard khác bắt; không sửa production để chấp nhận hai fixture sai đó. Oracle count negative ban đầu cũng sai output nên không chứng minh riêng count.
 
 Điều phối đã thay custom frozen/cache bằng dataclass frozen, bổ sung schema/size/phase/PID/cleanup guards, bounded I/O, constant messages và sanitized causes. Snapshot được chụp/validate lại trước I/O, owner không đọc lại mapping của caller sau publication. Bổ sung tests fault/stream/FD/lock/cleanup/interrupt, all-phase matrix, stale/immutable evidence và snapshot mutation; bốn mutant thực sự làm cùng acceptance assertions fail.
