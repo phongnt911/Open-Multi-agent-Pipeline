@@ -11,7 +11,8 @@
 | --- | --- | --- | --- |
 | [SEC-02-B1a](SEC-02-B1a.md) | DONE (2026-10-28, PR #8) | Native profile/process primitive, default runner giữ nguyên | Windows CI 3.12/3.14, 457 tests mỗi job |
 | [SEC-02-B1b](SEC-02-B1b.md) | DONE (2026-10-29, PR #9) | L2 layout/env/manifest/artifact reader offline | Sáu file ownership; không activation/orchestration |
-| B1c | Chưa giao | Orchestration/state/evidence/recovery, schema tương thích | Gói riêng sau B1a/B1b review |
+| [B1c-DESIGN](SEC-02-B1c-DESIGN.md) | DONE (DESIGN only) | Hợp đồng journal/expectation, ownership và compatibility offline | [ADR-0011](../decisions/0011-b1c-offline-orchestration.md), [review r3](../reviews/SEC-02-B1c-DESIGN-r3.md) |
+| B1c implementation | Chưa giao | B1c-1 journal/expectation trước, execution/bridge/recovery sau | Không activation hoặc schema production mới |
 
 B1 DONE chỉ khi tất cả gói integration được giao/nghiệm thu/tích hợp, không
 lấy B1a DONE thay whole B1. Chưa reserve/implement config v2/state v3/evidence v2.
@@ -22,4 +23,5 @@ B1b merge `3428204`, main CI 40813350800 success 2/2, 521 tests mỗi lane
 Windows Python 3.12/3.14 cùng packaging/smoke; xem [báo cáo merge](../reviews/SEC-02-B1b-MERGE.md).
 Chỉ xuất bản hồ sơ đóng B1b và bản tổng hợp này. Các tài liệu/history dirty khác
 giữ riêng; không nhập vào gói đóng việc. Trạng thái PLANNED là whole B1,
-không phủ nhận B1a/B1b DONE và không tự giao B1c.
+không phủ nhận B1a/B1b DONE. B1c-DESIGN được giao riêng sau PR #10;
+implementation chỉ được giao sau design ACCEPTED và task ownership/AC cụ thể.
