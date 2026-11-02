@@ -8,7 +8,8 @@ merge `3428204` và [main CI 40813350800](https://github.com/phongnt911/Open-Mul
 success 2/2. [Báo cáo nghiệm thu](reviews/SEC-02-B1b-MERGE.md) và
 [phân gói B1](tasks/SEC-02-B1.md) là nguồn đối chiếu. [B1c-DESIGN](tasks/SEC-02-B1c-DESIGN.md)
 đã nghiệm thu DESIGN only với [ADR-0011](decisions/0011-b1c-offline-orchestration.md) và [review r3](reviews/SEC-02-B1c-DESIGN-r3.md).
-B1c implementation/B2 chưa giao; không tự mở orchestration/schema/activation hoặc SEC-03/G4.
+[B1c-1](tasks/SEC-02-B1c-1.md) REVIEW: journal/expectation offline theo ADR-0011;
+B1c-2 execution/B2 chưa giao, không tự mở activation hoặc SEC-03/G4.
 
 ## Baseline và thứ tự
 
@@ -78,7 +79,7 @@ không kích hoạt tính năng phụ thuộc khi gate trước chưa đạt.
   quyền đọc/ghi, credentials, network, vùng runtime/vault và process model.
   Làm thử nghiệm nhỏ trước khi xây framework. Nếu chưa đạt thì chỉ công bố
   chế độ Worker hợp tác và chặn các tuyên bố bảo mật tương ứng.
-- **SEC-02 [REVIEW — A/B0/B1a/B1b đã tích hợp; B1c-DESIGN DONE, implementation chưa giao]** — [gói giao việc](tasks/SEC-02.md): test runner ngoài quyền Worker, inputs/config/import hooks
+- **SEC-02 [REVIEW — A/B0/B1a/B1b đã tích hợp; B1c-DESIGN DONE, B1c-1 REVIEW]** — [gói giao việc](tasks/SEC-02.md): test runner ngoài quyền Worker, inputs/config/import hooks
   được kiểm soát, manifest nằm ngoài quyền ghi. Test sửa test, conftest,
   sitecustomize, runner config, fake output/exit và kết quả cũ. Hash cạnh file
   không được nghiệm thu là immutable vault.
