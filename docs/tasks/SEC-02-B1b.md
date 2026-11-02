@@ -1,6 +1,6 @@
 # SEC-02-B1b: Layout L2 và trusted inputs offline
 
-- Trạng thái: **REVIEW**, AI thực thi hoàn thành B1b-1–B1b-8 ngày 2026-10-28, bàn giao reviewer độc lập. Một owner tuần tự, không subagent.
+- Trạng thái: **DONE**, AI thực thi hoàn thành B1b-1–B1b-8 ngày 2026-10-28, bàn giao reviewer độc lập. Một owner tuần tự, không subagent.
 - Base: `8e33dadaf257e14bb641a0cf0b0327e7c28f45ef`, main sau PR #8. Nhánh đã tạo: `codex/sec-02-b1b-offline-layout`.
 - Phụ thuộc: B1a DONE, main CI 40625012964 success Windows 3.12/3.14, **457 tests**. G3 mở; B1c/B2 chưa giao.
 - Điều phối chạy lại baseline trước giao: `python tools/check.py` **457 tests OK**, 127.868s, exit 0; `git diff --check` exit 0; diff code/tests/workflow/checker/dependency so với base rỗng. Đây chưa phải evidence implementation B1b hoặc local 3.14.
@@ -90,3 +90,11 @@ Quyết định chủ dự án ngày 2026-10-28: B1b chỉ bắt buộc kiểm t
 - Evidence: `.omp/sec02-b1b-r5-review-probe.py`/`.json`, snapshot, original source copies, `sec02-b1b-r5-delta.diff`, `sec02-b1b-r5-audit.py`/`.json`; tool archives full-before `12ec067291236ac4`, focused-after `e9950d1c1370c460`, full-after `1a4db77707c2c741`.
 - Đối soát toàn bộ 13 file test baseline theo git show: 0 drift; protected diff và index rỗng. Giữ thay đổi có sẵn ngoài ownership theo snapshot đầu lượt r5.
 - Review r5 ACCEPTED trong phạm vi implementation offline; Antigravity review độc lập delta cuối không có finding tồn đọng (static only), điều phối chạy kiểm chứng động. Task vẫn REVIEW chờ integration: chưa có packaging/exact-commit CI cho patch này, chưa commit/push/merge. B1c/B2 chưa giao; G3 mở. Xem docs/reviews/SEC-02-B1b-r5.md.
+
+## Điều phối nghiệm thu sau merge — 2026-10-29
+
+B1b và gói tích hợp DONE sau PR #9, merge 3428204d62856bc6b70c95f95cf887d6841740f9, main CI https://github.com/phongnt911/Open-Multi-agent-Pipeline/actions/runs/40813350800 success 2/2; mỗi lane Windows Python 3.12.10/3.14.9 chạy 521 tests OK, 0 skip, packaging và smoke ngoài source đạt. Merge tree khớp head accepted. Xem docs/reviews/SEC-02-B1b-MERGE.md. Các trạng thái REVIEW/IN_PROGRESS ở evidence trước đó là lịch sử trước merge. G3 vẫn mở; B1c/B2 chưa giao. Đây là cập nhật trạng thái điều phối local sau actual-main CI, không thuộc chín-file tree đã merge; không tự xuất bản tài liệu/history ngoài scope.
+
+## Ghi chú hồ sơ đóng việc — 2026-11-02
+
+Bản này thuộc gói xuất bản hồ sơ B1b sau nghiệm thu. Các mô tả tài liệu local/chưa xuất bản ở trên phản ánh thời điểm ghi nhận ngày 2026-10-29; bằng chứng và giới hạn cũ được giữ nguyên. Gói tài liệu này không đổi code/tests/schema hoặc mở B1c/B2, không đóng G3.

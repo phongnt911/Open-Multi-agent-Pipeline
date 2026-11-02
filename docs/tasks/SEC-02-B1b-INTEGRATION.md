@@ -1,6 +1,6 @@
 # SEC-02-B1b-INTEGRATION
 
-- Trạng thái: IN_PROGRESS, 2026-10-29. Điều phối: AI trong chat; Antigravity sở hữu riêng handoff tích hợp mới, không sửa implementation.
+- Trạng thái: DONE, 2026-10-29. Điều phối: AI trong chat; Antigravity sở hữu riêng handoff tích hợp mới, không sửa implementation.
 - Quyền chủ dự án: giao việc tích hợp/review; đủ điều kiện thì commit, push, tạo PR và merge. Không tự mở G3/B1c/B2.
 - Base: `8e33dadaf257e14bb641a0cf0b0327e7c28f45ef`. Đầu vào: review B1b r5 ACCEPTED và sáu hashes trong handoff/audit r5.
 
@@ -24,3 +24,11 @@
 ## Handoff bắt buộc
 
 Báo file thay đổi, manifest/hashes, base/head/merge/tree, test command/OS/Python/count/skips/exit, packaging, CI URL/jobs, denied actions, lỗi và phần chưa chứng minh. SUCCESS/exit0/response rỗng không thay thế sản phẩm và evidence.
+
+## Điều phối nghiệm thu sau merge — 2026-10-29
+
+B1b và gói tích hợp DONE sau PR #9, merge 3428204d62856bc6b70c95f95cf887d6841740f9, main CI https://github.com/phongnt911/Open-Multi-agent-Pipeline/actions/runs/40813350800 success 2/2; mỗi lane Windows Python 3.12.10/3.14.9 chạy 521 tests OK, 0 skip, packaging và smoke ngoài source đạt. Merge tree khớp head accepted. Xem docs/reviews/SEC-02-B1b-MERGE.md. Các trạng thái REVIEW/IN_PROGRESS ở evidence trước đó là lịch sử trước merge. G3 vẫn mở; B1c/B2 chưa giao. Đây là cập nhật trạng thái điều phối local sau actual-main CI, không thuộc chín-file tree đã merge; không tự xuất bản tài liệu/history ngoài scope.
+
+## Ghi chú hồ sơ đóng việc — 2026-11-02
+
+Bản này thuộc gói xuất bản hồ sơ B1b sau nghiệm thu. Các mô tả tài liệu local/chưa xuất bản ở trên phản ánh thời điểm ghi nhận ngày 2026-10-29; bằng chứng và giới hạn cũ được giữ nguyên. Gói tài liệu này không đổi code/tests/schema hoặc mở B1c/B2, không đóng G3.

@@ -151,6 +151,12 @@ hoặc nhận tiếp task khác.
 
 ## Công việc tiếp theo
 
-[SEC-02](docs/tasks/SEC-02.md) READY, chỉ giai đoạn A: proof Python và trusted
-runner inputs trên Windows 3.12/3.14. Chưa triển khai production boundary.
-G3 còn mở; không tuyên bố AppContainer đã bảo vệ tài sản thật.
+[SEC-02](docs/tasks/SEC-02.md) tổng vẫn REVIEW. A, B0, B1a và
+[B1b](docs/tasks/SEC-02-B1b.md) đã nghiệm thu/tích hợp; B1b DONE sau
+[PR #9](https://github.com/phongnt911/Open-Multi-agent-Pipeline/pull/9), merge
+`3428204`, [main CI](https://github.com/phongnt911/Open-Multi-agent-Pipeline/actions/runs/40813350800)
+đạt 521 tests trên mỗi lane Windows Python 3.12/3.14 cùng packaging/smoke.
+Xem [báo cáo merge](docs/reviews/SEC-02-B1b-MERGE.md) và
+[phân gói B1](docs/tasks/SEC-02-B1.md). B1c/B2 chưa giao; G3 còn mở.
+B1b chỉ có module/fixture offline, chưa nối vào main/CLI hoặc kích hoạt
+production boundary; không tuyên bố đã bảo vệ tài sản thật.
