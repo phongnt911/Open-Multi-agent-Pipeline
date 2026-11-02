@@ -145,7 +145,7 @@ trên Python 3.12/3.14, không gọi AI thật hoặc tự publish.
 [Quy trình điều phối/review AI](docs/COORDINATION.md) quy định quyền giao việc
 và nghiệm thu. FND-01/FND-02, G0, [DAT-01](docs/tasks/DAT-01.md) và
 [REC-01](docs/tasks/REC-01.md), [REC-02](docs/tasks/REC-02.md) đã nghiệm thu và tích hợp.
-G1 DONE theo [quyết định điều phối](docs/reviews/G1-CLOSURE.md); PROC-01 và
+G1 DONE theo [lộ trình](docs/ROADMAP.md#g1); PROC-01 và
 PROC-02/PROC-03 đã merge/nghiệm thu; G2 đã đóng. [SEC-01](docs/tasks/SEC-01.md) đã DONE ([evidence merge](docs/reviews/SEC-01-MERGE.md)); G3 vẫn mở. AI thực thi bàn giao để reviewer nghiệm thu, không tự push main
 hoặc nhận tiếp task khác.
 
@@ -157,6 +157,9 @@ hoặc nhận tiếp task khác.
 `3428204`, [main CI](https://github.com/phongnt911/Open-Multi-agent-Pipeline/actions/runs/40813350800)
 đạt 521 tests trên mỗi lane Windows Python 3.12/3.14 cùng packaging/smoke.
 Xem [báo cáo merge](docs/reviews/SEC-02-B1b-MERGE.md) và
-[phân gói B1](docs/tasks/SEC-02-B1.md). B1c/B2 chưa giao; G3 còn mở.
+[phân gói B1](docs/tasks/SEC-02-B1.md). B1c-DESIGN đã nghiệm thu qua PR #11;
+[B1c-1](docs/tasks/SEC-02-B1c-1.md) đã nghiệm thu journal/expectation offline với 32 tests mới (tổng 553),
+Windows CI Python3.12/3.14 và package/smoke đạt; xem [review](docs/reviews/SEC-02-B1c-1-r3.md).
+B1c-2 execution/B2 chưa giao; G3 còn mở.
 B1b chỉ có module/fixture offline, chưa nối vào main/CLI hoặc kích hoạt
 production boundary; không tuyên bố đã bảo vệ tài sản thật.

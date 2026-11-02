@@ -219,6 +219,31 @@ checkpoint schema.
   - Áp dụng trên Windows Python 3.12 theo quyết định của chủ dự án; không claim hỗ trợ nền tảng khác.
 
 
+## SEC-02-B1c-1: journal/expectation offline
+
+Gói [B1c-1](tasks/SEC-02-B1c-1.md) triển khai riêng hợp đồng
+[ADR-0011](decisions/0011-b1c-offline-orchestration.md), không nối main/CLI.
+Config/task v1, state v1/v2 và verification evidence hiện hành giữ nguyên;
+không reserve config v2/state v3/evidence v2.
+
+- `FixtureExpectation` đóng schema `omp.sec02.b1c.expectation.v1`; digest
+  canonical JSON UTF-8 được trusted fixture approve trước launch và bind vào
+  `TrustedManifest.spec_hash`. `verify_artifact` so output/count độc lập sau
+  B1b reader; JSON PASS/exit0 không tự tạo authority.
+- Journal schema `omp.sec02.b1c.journal.v1` là các snapshot theo revision bất
+  biến, hash exact bytes record trước, identity/phase/observation guards.
+  Tạo directory mới và giữ byte lock native Windows trong phiên owner;
+  publication temp exclusive/flush/fsync/rename no-clobber, không overwrite
+  evidence. Không suy power-loss guarantee từ thao tác này.
+- `create_journal` chỉ tạo live owner mới cho trusted fixture; `append_snapshot`
+  validate/revalidate và từ chối head bị thay đổi. `inspect_journal` chỉ đọc
+  historical observations, không mở/adopt owner, spawn, clear PID hoặc resume.
+  SID/PID/path/booleans trong JSON không phải ownership hoặc OS proof.
+- Parent/control directory do trusted harness chuẩn bị ngoài quyền Worker;
+  module không cấp ACL hoặc bảo vệ tài sản thật. Execution/AppContainer bridge,
+  lost-owner recovery authority và production activation thuộc task sau.
+  G3 vẫn mở; network/credentials/arbitrary tests/power loss chưa được chứng minh.
+
 ## Ranh giới module mục tiêu
 
 | Trách nhiệm | Đầu vào/đầu ra | Quyền side effect |
