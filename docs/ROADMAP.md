@@ -1,13 +1,17 @@
 # Lộ trình OMP
 
-Ngày lập: 2026-10-21. Cập nhật điều phối 2026-10-25. G0/G1/G2 đã nghiệm thu;
-SEC-01 DONE, G3 vẫn mở. Nền tảng hỗ trợ Windows, Python 3.12 baseline và
+Ngày lập: 2026-10-21. Cập nhật điều phối 2026-11-02. G0/G1/G2 đã nghiệm thu;
+SEC-01 DONE; SEC-02 A/B0/B1a/B1b đã nghiệm thu/tích hợp, G3 vẫn mở. Nền tảng hỗ trợ Windows, Python 3.12 baseline và
 3.14 trong CI sau kiểm chứng. Không mở Linux hoặc 3.10 trở lại matrix ngầm.
-Công việc tiếp theo: SEC-02 READY, chỉ giai đoạn A theo task được giao.
+B1b DONE sau [PR #9](https://github.com/phongnt911/Open-Multi-agent-Pipeline/pull/9),
+merge `3428204` và [main CI 40813350800](https://github.com/phongnt911/Open-Multi-agent-Pipeline/actions/runs/40813350800)
+success 2/2. [Báo cáo nghiệm thu](reviews/SEC-02-B1b-MERGE.md) và
+[phân gói B1](tasks/SEC-02-B1.md) là nguồn đối chiếu. B1c/B2 chưa giao;
+không tự mở orchestration/schema/activation hoặc SEC-03/G4.
 
 ## Baseline và thứ tự
 
-Baseline hiện tại: 233 offline tests trên Windows, giữ 8 pipeline regressions
+Baseline hiện tại: 521 offline tests trên Windows tại merge `3428204`, giữ 8 pipeline regressions
 ban đầu. Python 3.12 là baseline; 3.14 compatibility CI được kiểm chứng riêng.
 Tests dùng fake provider, không có live-provider/credential thật mặc định.
 G2 đã kiểm lifecycle/lock/containment/recovery; SEC-01 chỉ chứng minh fixture
@@ -73,7 +77,7 @@ không kích hoạt tính năng phụ thuộc khi gate trước chưa đạt.
   quyền đọc/ghi, credentials, network, vùng runtime/vault và process model.
   Làm thử nghiệm nhỏ trước khi xây framework. Nếu chưa đạt thì chỉ công bố
   chế độ Worker hợp tác và chặn các tuyên bố bảo mật tương ứng.
-- **SEC-02 [READY — giai đoạn A]** — [gói giao việc](tasks/SEC-02.md): test runner ngoài quyền Worker, inputs/config/import hooks
+- **SEC-02 [REVIEW — A/B0/B1a/B1b đã tích hợp; B1c chưa giao]** — [gói giao việc](tasks/SEC-02.md): test runner ngoài quyền Worker, inputs/config/import hooks
   được kiểm soát, manifest nằm ngoài quyền ghi. Test sửa test, conftest,
   sitecustomize, runner config, fake output/exit và kết quả cũ. Hash cạnh file
   không được nghiệm thu là immutable vault.
@@ -106,8 +110,8 @@ không kích hoạt tính năng phụ thuộc khi gate trước chưa đạt.
 ## Gói công việc tiếp theo
 
 1. Windows/Python 3.12 dùng ngay; matrix 3.12/3.14 được kiểm chứng riêng.
-2. SEC-02 giai đoạn A: proof Python và trusted runner inputs theo task; fake Worker.
-3. Chỉ sau review giai đoạn A mới chốt thiết kế/tích hợp SEC-02 giai đoạn B.
+2. A/B0/B1a/B1b đã nghiệm thu; B1b chỉ module/fixture offline, default runner và CLI giữ nguyên.
+3. B1c cần gói giao việc/schema compatibility/recovery riêng trước implementation; hiện chưa giao. B2 activation còn chờ security dependencies.
 4. SEC-03 và việc đóng G3 tiếp tục chờ; không mở PIPE/provider/UI trước gate.
 
 Mỗi công việc qua `TODO → IN_PROGRESS → REVIEW → DONE`; `BLOCKED` ghi dependency,
@@ -126,4 +130,6 @@ G3 vẫn mở, còn SEC-02/SEC-03; không tự đóng gate hoặc mở task ti�
 
 Bỏ Linux khỏi CI và phạm vi hỗ trợ; Python tối thiểu 3.12, CI Windows 3.12/3.14.
 Bằng chứng lịch sử giữ nguyên; quyết định hiện hành tại ADR-0007. SEC-02 chỉ
-được làm giai đoạn A; G3 không tự đóng vì thay matrix hoặc SEC-01 DONE.
+được làm giai đoạn A tại thời điểm quyết định này. Phạm vi A là lịch sử;
+trạng thái B1a/B1b hiện hành ở đầu roadmap. G3 không tự đóng vì thay matrix,
+SEC-01 DONE hoặc B1b DONE.
